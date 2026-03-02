@@ -27,7 +27,7 @@ export function FileLimitBanner() {
       </div>
       <p className="text-sm">
         Free file limit exceeded. You can only edit the <strong>{maxEditableFiles} most recently created</strong>{' '}
-        Quadratic files.{' '}
+        BankSheet files.{' '}
         <button
           className="text-primary underline hover:text-primary/80"
           onClick={() => showUpgradeDialog('fileLimitReached')}

@@ -211,7 +211,7 @@ export const Component = () => {
 
             <div>
               <SettingControl
-                label="Help improve Quadratic"
+                label="Help improve BankSheet"
                 description={
                   <>
                     Enable the automated collection and analysis of some usage data.{' '}

@@ -31,7 +31,7 @@ const EmptyScheduledTasksList = () => {
       <ScheduledTasksIcon size="lg" className="mb-4 text-muted-foreground" />
       <h4 className="font-bold">No scheduled tasks</h4>
       <p className="mt-1 text-muted-foreground">
-        Schedule a task to run automatically at an interval on Quadratic's servers.{' '}
+        Schedule a task to run automatically at an interval on BankSheet's servers.{' '}
         <a className="underline" href={DOCUMENTATION_SCHEDULED_TASKS_URL}>
           Learn more.
         </a>

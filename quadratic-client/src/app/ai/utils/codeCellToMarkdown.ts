@@ -69,9 +69,9 @@ ${
 }
 ${language === 'MIXPANEL' || language === 'GOOGLE_ANALYTICS' || language === 'PLAID' ? 'When generating Mixpanel, Google Analytics, or Plaid queries, do not include the schema name in the query.  Only quote column names and tables names if they have reserved words.  Table names are not requires in select statemnts where only one table is being selected.' : ''}
 \n`
-    : `Add imports to the top of the code cell and do not use any libraries or functions that are not listed in the Quadratic documentation.\n
+    : `Add imports to the top of the code cell and do not use any libraries or functions that are not listed in the BankSheet documentation.\n
 Use any functions that are part of the ${language} library.\n
-A code cell can return only one type of value as specified in the Quadratic documentation.\n
+A code cell can return only one type of value as specified in the BankSheet documentation.\n
 A code cell cannot display both a chart and return a data frame at the same time.\n
 A code cell cannot display multiple charts at the same time.\n
 Do not use conditional returns in code cells.\n

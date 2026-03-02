@@ -1,5 +1,5 @@
 import { useFileImport } from '@/app/ui/hooks/useFileImport';
-import Logo from '@/dashboard/components/quadratic-logo.svg';
+import { BanksheetLogo } from '@/shared/components/BanksheetLogo';
 import { useDashboardRouteLoaderData } from '@/routes/_dashboard';
 import type { TeamAction } from '@/routes/teams.$teamUuid';
 import { apiClient } from '@/shared/api/apiClient';
@@ -160,7 +160,7 @@ export function OnboardingBanner() {
       completed: users.length > 1 || invites.length > 0,
       content: (
         <>
-          <p>Invite a collaborator to Quadratic.</p>
+          <p>Invite a collaborator to BankSheet.</p>
 
           <InviteForm teamUuid={teamUuid} />
           <p className="text-muted-foreground">
@@ -203,7 +203,7 @@ export function OnboardingBanner() {
       </Button>
 
       <div className="flex items-center gap-4 border-b border-border pb-3">
-        <img src={Logo} width="24" height="35" alt="Quadratic logo" />
+        <BanksheetLogo size={28} className="text-foreground" />
         <div className="flex flex-col">
           <h3 className="text-md font-medium leading-6 tracking-tight">Getting started with your team</h3>
           <p className="text-sm text-muted-foreground">

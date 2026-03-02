@@ -77,7 +77,7 @@ declare global {
   ): Record<string, number | string | boolean | undefined>[];
 
   /**
-   * Quadratic API
+   * BankSheet API
    */
   class q {
     /**

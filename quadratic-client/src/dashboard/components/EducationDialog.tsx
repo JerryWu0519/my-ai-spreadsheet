@@ -42,9 +42,9 @@ export function EducationDialog() {
               {isEnrolled ? 'Enrolled' : 'Ineligible'}
             </Badge>
           </div>
-          <DialogTitle>Quadratic for education</DialogTitle>
+          <DialogTitle>BankSheet for education</DialogTitle>
           <DialogDescription className="flex flex-col gap-2">
-            Students, teachers, and researchers using a verified school email get free access to Quadratic.
+            Students, teachers, and researchers using a verified school email get free access to BankSheet.
             {!isEnrolled && (
               <span>
                 Your account email ({loggedInUser?.email}) does not qualify.{' '}

@@ -28,7 +28,7 @@ export const TopBar = () => {
         event.preventDefault();
       }}
       className={cn(
-        'relative flex h-12 w-full flex-shrink-0 select-none justify-between gap-2 border-b bg-background pl-2 pr-4',
+        'relative flex h-12 w-full flex-shrink-0 select-none justify-between gap-2 border-b bg-[hsl(var(--toolbar-bg))] pl-2 pr-4',
         agentMode ? 'border-transparent' : 'border-border'
       )}
     >
@@ -63,7 +63,7 @@ export const TopBar = () => {
                   Back to dashboard
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>Quadratic {VERSION}</DropdownMenuItem>
+                <DropdownMenuItem disabled>Banksheet {VERSION}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </>

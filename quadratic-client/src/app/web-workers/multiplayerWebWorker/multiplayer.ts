@@ -328,7 +328,7 @@ export class Multiplayer {
           session_id: aiSessionId,
           file_id: this.fileId || '',
           user_id: 'ai-analyst',
-          first_name: 'Quadratic',
+          first_name: 'BankSheet',
           last_name: 'AI',
           email: 'ai@quadratic.ai',
           image: '/logo192.png',

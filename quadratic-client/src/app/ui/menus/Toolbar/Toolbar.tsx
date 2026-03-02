@@ -12,7 +12,7 @@ export const Toolbar = memo(() => {
   const canEdit = permissions.includes('FILE_EDIT');
 
   return (
-    <div className="pointer-up-ignore hidden select-none border-b border-border md:flex md:flex-col">
+    <div className="pointer-up-ignore hidden select-none border-b border-border bg-[hsl(var(--toolbar-bg))] md:flex md:flex-col">
       {/* Row 1: Cell reference + Formatting buttons + Zoom */}
       <div className="flex h-10 justify-between">
         <div className="w-48 flex-shrink-0 border-r border-border xl:w-64 2xl:w-80">
@@ -30,7 +30,7 @@ export const Toolbar = memo(() => {
       </div>
 
       {/* Row 2: Formula bar — shows cell formula or value, like Excel */}
-      <div className="flex h-7 items-center border-t border-border">
+      <div className="flex h-8 items-center border-t border-border/60 bg-muted/20">
         <FormulaBar />
       </div>
     </div>

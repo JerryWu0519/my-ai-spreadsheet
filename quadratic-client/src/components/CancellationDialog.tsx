@@ -135,7 +135,7 @@ export function CancellationDialog({ teamUuid }: { teamUuid: string }) {
           <>
             <div className="flex flex-col gap-2">
               <p className="text-sm">
-                <strong>50% off next month if you stay with us.</strong> We’re improving Quadratic based on user
+                <strong>50% off next month if you stay with us.</strong> We’re improving BankSheet based on user
                 feedback. If things haven’t been great, we’d love to try and fix that—with a discount too.
               </p>
             </div>

@@ -259,7 +259,7 @@ export function SettingsDialog() {
               <div className="mt-auto" />
               <div className="border-t border-border px-4 py-3">
                 <div className="space-y-1">
-                  <h3 className="text-sm font-semibold">Quadratic</h3>
+                  <h3 className="text-sm font-semibold">BankSheet</h3>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>Version {VERSION}</span>
                     <button

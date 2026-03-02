@@ -1,5 +1,5 @@
 /**
- * Vite middleware that intercepts requests to the Quadratic API
+ * Vite middleware that intercepts requests to the BankSheet API
  * and returns mock data so the frontend can run standalone without a backend.
  *
  * Only active when VITE_AUTH_TYPE=local.
@@ -10,13 +10,13 @@ const MOCK_USER_ID = 1;
 const NOW = new Date().toISOString();
 
 // ---------------------------------------------------------------------------
-// Gemini configuration
+// Gemini configuration – populated by mockApiPlugin() from Vite's loadEnv
 // ---------------------------------------------------------------------------
-const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash';
+let GEMINI_API_KEY = '';
+let GEMINI_MODEL = 'gemini-2.0-flash';
 
 // ---------------------------------------------------------------------------
-// Gemini-compatible function declarations for Quadratic AI tools
+// Gemini-compatible function declarations for BankSheet AI tools
 // These mirror what quadratic-api builds from aiToolsSpec
 // ---------------------------------------------------------------------------
 const GEMINI_TOOL_DECLARATIONS = [
@@ -368,7 +368,11 @@ function readBody(req) {
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
-export function mockApiPlugin(apiUrl) {
+export function mockApiPlugin(apiUrl, env = {}) {
+  // Hydrate Gemini config from Vite's loadEnv (includes .env.local values)
+  GEMINI_API_KEY = env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+  GEMINI_MODEL = env.VITE_GEMINI_MODEL || process.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash';
+  console.log('[mock-api] Gemini API key loaded:', GEMINI_API_KEY ? 'YES (ends ...' + GEMINI_API_KEY.slice(-4) + ')' : 'MISSING');
   return {
     name: 'mock-api',
     configureServer(server) {
@@ -429,7 +433,7 @@ export function mockApiPlugin(apiUrl) {
             // SEC EDGAR requires an identifying User-Agent; other sites need browser-like UA
             const isSEC = url.includes('sec.gov');
             const ua = isSEC
-              ? 'Quadratic/1.0 research@example.com'
+              ? 'BankSheet/1.0 research@example.com'
               : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
             const response = await fetch(url, {
               signal: controller.signal,
@@ -662,7 +666,7 @@ export function mockApiPlugin(apiUrl) {
           const { messages, modelKey, useStream, useToolsPrompt, source, toolName } = body;
           const isWebSearch = source === 'WebSearch' || toolName === 'web_search_internal';
 
-          // ---- Build Gemini contents from Quadratic messages ----
+          // ---- Build Gemini contents from BankSheet messages ----
           const geminiContents = [];
           const systemParts = [];
 
@@ -900,7 +904,7 @@ RULE 7 — DATA EXTRACTION FROM SEC CONTEXT:
           // prompt context so Gemini always has the numbers available.
 
           // SEC EDGAR constants (must be declared before pre-fetch block)
-          const SEC_UA = 'Quadratic/1.0 research@example.com'; // SEC requires identifying UA
+          const SEC_UA = 'BankSheet/1.0 research@example.com'; // SEC requires identifying UA
           const secEdgarCache = new Map();
 
           // ---- Pre-fetch SEC filing context ----

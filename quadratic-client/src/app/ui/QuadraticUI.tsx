@@ -136,7 +136,7 @@ export default function QuadraticUI() {
     const isOOM = isOutOfMemoryError(error.error);
     return (
       <EmptyPage
-        title={isOOM ? 'Out of memory' : 'Quadratic crashed'}
+        title={isOOM ? 'Out of memory' : 'Banksheet crashed'}
         description={
           isOOM
             ? 'Your browser ran out of memory. This can happen with large files or complex operations. Try reloading and working with smaller datasets, or contact support if you need help.'

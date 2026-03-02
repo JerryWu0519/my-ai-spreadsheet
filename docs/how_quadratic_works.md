@@ -1,6 +1,6 @@
-# How Does Quadratic Work?
+# How Does BankSheet Work?
 ## The Grid
-The Quadratic Grid is built on WebGL using [PixiJS](https://pixijs.io/). This allows us to render a high-performance grid with all your data, where you can quickly pan and zoom.
+The BankSheet Grid is built on WebGL using [PixiJS](https://pixijs.io/). This allows us to render a high-performance grid with all your data, where you can quickly pan and zoom.
 By basically using a game engine to render the grid, this gives us a high level of control over what is drawn to the grid and our render pipeline.
 
 We believe that for a tool to become joyful to use, it has to run very smoothly. We prioritize keeping a high frame rate and eliminating visual artifacts when panning and zooming the grid.
@@ -11,7 +11,7 @@ All cell code is executed on the front end in the client's browser. This creates
 
 # Future Architecture
 Note: this is not the current Architecture. This diagram is where we envision the product architecture going.
-<img width="2224" alt="Quadratic Client Architecture 2" src="https://user-images.githubusercontent.com/3479421/163222487-c979082b-6854-4e81-a807-907d7e5fa8be.png">
+<img width="2224" alt="BankSheet Client Architecture 2" src="https://user-images.githubusercontent.com/3479421/163222487-c979082b-6854-4e81-a807-907d7e5fa8be.png">
 
 We envision a spreadsheet application where you can seamlessly bring in millions of rows of data, and run formulas, scripts, and SQL on your data all in one visual environment.
 

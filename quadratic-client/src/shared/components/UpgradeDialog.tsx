@@ -59,7 +59,7 @@ export function UpgradeDialog({ teamUuid, canManageBilling }: UpgradeDialogProps
       >
         <DialogHeader>
           <DialogTitle>{upgradeTitle}</DialogTitle>
-          <DialogDescription>Be sure to unlock all the individual and team features of Quadratic.</DialogDescription>
+          <DialogDescription>Be sure to unlock all the individual and team features of BankSheet.</DialogDescription>
         </DialogHeader>
         <div className="relative flex flex-col gap-2">
           {reasonText && (

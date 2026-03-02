@@ -39,7 +39,7 @@ export function useCodeEditorCompletions({ language }: { language: CodeCellLangu
         {
           role: 'user',
           content: [
-            createTextContent(`You are a code editor assistant, you are inside a code editor of code cell of spreadsheet application called Quadratic.\n
+            createTextContent(`You are a code editor assistant, you are inside a code editor of code cell of spreadsheet application called BankSheet.\n
 The language of the code cell is ${language}.\n
 ${
   schemaJsonForAi &&

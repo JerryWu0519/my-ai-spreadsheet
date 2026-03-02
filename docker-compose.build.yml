@@ -10,7 +10,7 @@ services:
       args:
         CLIENT_DEV: ${CLIENT_DEV}
 
-  quadratic-api:
+  banksheet-api:
     build:
       context: .
       dockerfile: quadratic-api/Dockerfile

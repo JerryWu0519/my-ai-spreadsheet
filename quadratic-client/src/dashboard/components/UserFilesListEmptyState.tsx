@@ -101,7 +101,7 @@ const CreateFileEmptyState = ({ isPrivate = false, title }: { isPrivate?: boolea
             <button onClick={handleCreateFile} className="underline hover:text-primary">
               Create a new file
             </button>{' '}
-            or drag and drop a CSV, Excel, Parquet, or Quadratic file here.
+            or drag and drop a CSV, Excel, Parquet, or BankSheet file here.
           </>
         }
         Icon={FileIcon}

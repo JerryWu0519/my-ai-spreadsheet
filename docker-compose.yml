@@ -80,6 +80,9 @@ services:
     container_name: client
     environment:
       VITE_DEBUG: 1
+      VITE_BANKSHEET_API_URL: ${QUADRATIC_API_URL_EXTERNAL}
+      VITE_BANKSHEET_MULTIPLAYER_URL: ${QUADRATIC_MULTIPLAYER_URL_EXTERNAL}
+      VITE_BANKSHEET_CONNECTION_URL: ${QUADRATIC_CONNECTION_URL_EXTERNAL}
       VITE_QUADRATIC_API_URL: ${QUADRATIC_API_URL_EXTERNAL}
       VITE_QUADRATIC_MULTIPLAYER_URL: ${QUADRATIC_MULTIPLAYER_URL_EXTERNAL}
       VITE_QUADRATIC_CONNECTION_URL: ${QUADRATIC_CONNECTION_URL_EXTERNAL}
@@ -104,7 +107,7 @@ services:
       - ./docker/client/config/nginx.conf:/etc/nginx/nginx.conf
       - ./docker/client/config/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
-      quadratic-api:
+      banksheet-api:
         condition: service_started
     profiles:
       - quadratic-client
@@ -115,10 +118,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  quadratic-api:
+  banksheet-api:
     extends:
       file: docker-compose.${ECR_OR_BUILD:-build}.yml
-      service: quadratic-api
+      service: banksheet-api
     container_name: api
     environment:
       CORS: ${QUADRATIC_API_CORS}
@@ -204,7 +207,7 @@ services:
         condition: service_healthy
       # quadratic-client:
       #   condition: service_healthy
-      quadratic-api:
+      banksheet-api:
         condition: service_started
     profiles:
       - quadratic-multiplayer
@@ -256,7 +259,7 @@ services:
         condition: service_healthy
       quadratic-client:
         condition: service_healthy
-      quadratic-api:
+      banksheet-api:
         condition: service_started
     profiles:
       - quadratic-files
@@ -298,7 +301,7 @@ services:
     depends_on:
       quadratic-client:
         condition: service_healthy
-      quadratic-api:
+      banksheet-api:
         condition: service_started
     profiles:
       - quadratic-connection

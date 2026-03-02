@@ -692,7 +692,7 @@ export const Component = () => {
                       <Cross1Icon className="h-3.5 w-3.5" />
                     </button>
                     <div className="pr-4">
-                      <h4 className="mb-1 text-sm font-semibold">Connect Quadratic to your data</h4>
+                      <h4 className="mb-1 text-sm font-semibold">Connect BankSheet to your data</h4>
                       <p className="mb-3 text-sm text-muted-foreground">
                         Pull data from services like Google Analytics and Mixpanel, as well as databases like Postgres
                         and BigQuery.

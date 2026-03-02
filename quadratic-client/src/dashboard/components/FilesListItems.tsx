@@ -12,7 +12,7 @@ export function FilesListItems({
   return (
     <ul
       className={cn(
-        viewPreferences.layout === Layout.Grid && 'grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-4'
+        viewPreferences.layout === Layout.Grid && 'grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-5'
       )}
     >
       {children}
@@ -40,8 +40,8 @@ export function ListItemView({
   const { layout } = viewPreferences;
 
   return layout === Layout.Grid ? (
-    <div className="border border-border p-2 hover:bg-accent">
-      <div className="relative flex aspect-video items-center justify-center bg-background">
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--card-shadow)] transition-shadow duration-200 hover:shadow-[var(--card-shadow-hover)]">
+      <div className="relative flex aspect-video items-center justify-center bg-muted/30">
         {thumbnail ? (
           <img
             loading={lazyLoad ? 'lazy' : 'eager'}
@@ -66,11 +66,13 @@ export function ListItemView({
         {overlay && <div className="absolute left-1 top-1">{overlay}</div>}
       </div>
       <Separator className="border-accent" />
-      <div className="pt-2">{children}</div>
+      <div className="px-3 pb-3 pt-2">{children}</div>
     </div>
   ) : (
-    <div className={`flex w-full flex-row items-center gap-4 py-2 hover:bg-accent lg:px-2`}>
-      <div className={`relative hidden border border-border shadow-sm md:block`}>
+    <div
+      className={`flex w-full flex-row items-center gap-4 rounded-lg py-2 transition-colors duration-150 hover:bg-accent lg:px-2`}
+    >
+      <div className={`relative hidden overflow-hidden rounded-lg border border-border shadow-sm md:block`}>
         {thumbnail ? (
           <img
             loading={lazyLoad ? 'lazy' : 'eager'}

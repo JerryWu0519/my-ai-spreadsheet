@@ -160,7 +160,7 @@ export function ShareTeamDialog() {
             <strong className="font-bold">Over the user limit!</strong>
           </div>
           <span className="block sm:inline">
-            You are over your user limit of {license.limits.seats}. Please contact Quadratic Support to increase your
+            You are over your user limit of {license.limits.seats}. Please contact BankSheet Support to increase your
             limit.
           </span>
         </div>
@@ -171,7 +171,7 @@ export function ShareTeamDialog() {
           <div>
             <strong className="font-bold">License Revoked!</strong>
           </div>
-          <span className="block sm:inline">Your license has been revoked. Please contact Quadratic Support.</span>
+          <span className="block sm:inline">Your license has been revoked. Please contact BankSheet Support.</span>
         </div>
       )}
 

@@ -4,7 +4,7 @@ import { identifyEventAnalyticsUser } from '@/shared/utils/analyticsEvents';
 import { getUtmDataFromCookie } from '@/shared/utils/getUtmDataFromCookie';
 import { setUser } from '@sentry/react';
 
-// Quadratic only shares analytics on the QuadraticHQ.com hosted version where the environment variables are set.
+// BankSheet only shares analytics on the hosted version where the environment variables are set.
 
 type User = AuthUser | undefined;
 

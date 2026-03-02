@@ -96,8 +96,8 @@ export function DashboardSidebar({ isLoading }: { isLoading: boolean }) {
   const classNameIcons = `mx-0.5 text-muted-foreground`;
 
   return (
-    <nav className={`flex h-full flex-col gap-4 overflow-auto bg-accent`}>
-      <div className="sticky top-0 z-10 flex flex-col bg-accent px-3 pt-3">
+    <nav className={`flex h-full flex-col gap-4 overflow-auto bg-[hsl(var(--sidebar-bg))]`}>
+      <div className="sticky top-0 z-10 flex flex-col bg-[hsl(var(--sidebar-bg))] px-3 pt-3">
         <TeamSwitcher appIsLoading={isLoading} />
       </div>
       <div className={`flex flex-col px-3`}>
@@ -184,7 +184,7 @@ export function DashboardSidebar({ isLoading }: { isLoading: boolean }) {
             <div className="flex gap-2">
               <RocketIcon className="h-5 w-5 text-primary" />
               <div className="flex flex-col">
-                <span className="font-semibold">Upgrade to Quadratic Pro</span>
+                <span className="font-semibold">Upgrade to BankSheet Pro</span>
                 <span className="text-muted-foreground">Get more AI messages, unlimited files, and more.</span>
               </div>
             </div>
@@ -273,8 +273,8 @@ function SidebarNavLinkCreateButton({
 }
 
 const sidebarItemClasses = {
-  base: `dark:hover:brightness-125 hover:brightness-95 hover:saturate-150 dark:hover:saturate-100 bg-accent relative flex items-center gap-2 p-2 no-underline rounded`,
-  active: `bg-accent dark:brightness-125 brightness-95 saturate-150 dark:saturate-100`,
+  base: `relative flex items-center gap-2 p-2 no-underline rounded-md transition-colors duration-150 text-muted-foreground hover:bg-accent hover:text-foreground`,
+  active: `bg-accent text-foreground font-medium`,
 };
 
 function SidebarNavLink({
@@ -450,7 +450,7 @@ function CreateTeamAlert({ children }: { children: ReactNode }) {
       <AlertDialogContent className="max-w-sm">
         <AlertDialogHeader>
           <GroupIcon size="lg" />
-          <AlertDialogTitle>Teams in Quadratic</AlertDialogTitle>
+          <AlertDialogTitle>Teams in BankSheet</AlertDialogTitle>
           <AlertDialogDescription>
             Teams are a collaborative space for working with other people. Create a new team and answer a few onboarding
             questions to get started.

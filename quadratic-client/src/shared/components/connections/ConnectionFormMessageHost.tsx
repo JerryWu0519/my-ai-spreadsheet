@@ -15,7 +15,7 @@ export function isLocalHostAddress(host: string): boolean {
 export const ConnectionFormMessageHost = ({ value }: { value?: string }) => {
   return value && isLocalHostAddress(value) ? (
     <p className="text-xs text-muted-foreground">
-      Note: Quadratic runs in the cloud. Connecting to a local database requires SSH or self-hosting.
+      Note: BankSheet runs in the cloud. Connecting to a local database requires SSH or self-hosting.
     </p>
   ) : null;
 };

@@ -48,7 +48,7 @@ const ALL_WALKTHROUGH_STEPS: WalkthroughStep[] = [
     target: 'ai-chat-input',
     title: 'Start with a prompt',
     description:
-      'Tell Quadratic AI what you want to build. Describe your goal in plain language and let AI create formulas, analyze data, or build entire workflows for you.',
+      'Tell BankSheet AI what you want to build. Describe your goal in plain language and let AI create formulas, analyze data, or build entire workflows for you.',
     icon: <AIIcon className="h-8 w-8" />,
     position: 'top',
   },

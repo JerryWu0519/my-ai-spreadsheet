@@ -85,7 +85,7 @@ export const TopBarUsers = () => {
       const isFollowingYou = followers.includes(user.session_id); // follower
       const sessionId = user.session_id;
       const viewport = user.viewport;
-      const isScheduledRun = user.first_name === 'Quadratic' && user.last_name === 'Cloud Worker';
+      const isScheduledRun = user.first_name === 'BankSheet' && user.last_name === 'Cloud Worker';
 
       return {
         email: user.email,

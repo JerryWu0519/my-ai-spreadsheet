@@ -11,17 +11,26 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
   // Validate required environment variables at build time
-  const requiredEnvVars = [
-    'VITE_AUTH_TYPE',
-    'VITE_QUADRATIC_API_URL',
-    'VITE_QUADRATIC_MULTIPLAYER_URL',
-    'VITE_QUADRATIC_CONNECTION_URL',
-  ];
+  const requiredEnvVars = ['VITE_AUTH_TYPE'];
   if (env.VITE_AUTH_TYPE === 'workos') {
     requiredEnvVars.push('VITE_WORKOS_CLIENT_ID');
   }
 
+  const hasApiUrl = !!(env.VITE_BANKSHEET_API_URL || env.VITE_QUADRATIC_API_URL);
+  const hasMultiplayerUrl = !!(env.VITE_BANKSHEET_MULTIPLAYER_URL || env.VITE_QUADRATIC_MULTIPLAYER_URL);
+  const hasConnectionUrl = !!(env.VITE_BANKSHEET_CONNECTION_URL || env.VITE_QUADRATIC_CONNECTION_URL);
+
   const missingEnvVars = requiredEnvVars.filter((varName) => !(varName in env));
+  if (!hasApiUrl) {
+    missingEnvVars.push('VITE_BANKSHEET_API_URL or VITE_QUADRATIC_API_URL');
+  }
+  if (!hasMultiplayerUrl) {
+    missingEnvVars.push('VITE_BANKSHEET_MULTIPLAYER_URL or VITE_QUADRATIC_MULTIPLAYER_URL');
+  }
+  if (env.VITE_AUTH_TYPE !== 'local' && !hasConnectionUrl) {
+    missingEnvVars.push('VITE_BANKSHEET_CONNECTION_URL or VITE_QUADRATIC_CONNECTION_URL');
+  }
+
   if (missingEnvVars.length > 0) {
     throw new Error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
   }
@@ -61,7 +70,7 @@ export default defineConfig(({ mode }) => {
   // When running in local auth mode, add a mock API middleware so the
   // frontend can operate without a running backend server.
   if (env.VITE_AUTH_TYPE === 'local') {
-    plugins.push(mockApiPlugin(env.VITE_QUADRATIC_API_URL));
+    plugins.push(mockApiPlugin(env.VITE_BANKSHEET_API_URL || env.VITE_QUADRATIC_API_URL, env));
   }
 
   if (!!env.SENTRY_AUTH_TOKEN && env.SENTRY_AUTH_TOKEN !== 'none') {

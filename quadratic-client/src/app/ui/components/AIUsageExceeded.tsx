@@ -14,7 +14,7 @@ export const AIUsageExceeded = memo(() => {
       }
     >
       <h3 className="font-semibold">Monthly AI free tier exceeded</h3>
-      <p className="text-muted-foreground">Upgrade to a Pro plan to continue using Quadratic AI.</p>
+      <p className="text-muted-foreground">Upgrade to a Pro plan to continue using BankSheet AI.</p>
 
       <Button
         onClick={() => {

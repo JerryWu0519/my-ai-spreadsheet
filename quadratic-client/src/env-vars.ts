@@ -22,12 +22,28 @@ if (VITE_AUTH_TYPE === 'ory') {
   ensureEnvVarExists('VITE_ORY_HOST');
 }
 
-export const VITE_QUADRATIC_API_URL = import.meta.env.VITE_QUADRATIC_API_URL;
-export const VITE_QUADRATIC_MULTIPLAYER_URL = import.meta.env.VITE_QUADRATIC_MULTIPLAYER_URL;
-export const VITE_QUADRATIC_CONNECTION_URL = import.meta.env.VITE_QUADRATIC_CONNECTION_URL;
-['VITE_QUADRATIC_API_URL', 'VITE_QUADRATIC_MULTIPLAYER_URL', 'VITE_QUADRATIC_CONNECTION_URL'].forEach(
-  ensureEnvVarExists
-);
+export const VITE_BANKSHEET_API_URL = import.meta.env.VITE_BANKSHEET_API_URL ?? import.meta.env.VITE_QUADRATIC_API_URL;
+export const VITE_BANKSHEET_MULTIPLAYER_URL =
+  import.meta.env.VITE_BANKSHEET_MULTIPLAYER_URL ?? import.meta.env.VITE_QUADRATIC_MULTIPLAYER_URL;
+export const VITE_BANKSHEET_CONNECTION_URL =
+  import.meta.env.VITE_BANKSHEET_CONNECTION_URL ?? import.meta.env.VITE_QUADRATIC_CONNECTION_URL;
+
+export const VITE_QUADRATIC_API_URL = VITE_BANKSHEET_API_URL;
+export const VITE_QUADRATIC_MULTIPLAYER_URL = VITE_BANKSHEET_MULTIPLAYER_URL;
+export const VITE_QUADRATIC_CONNECTION_URL = VITE_BANKSHEET_CONNECTION_URL;
+
+if (!('VITE_BANKSHEET_API_URL' in import.meta.env || 'VITE_QUADRATIC_API_URL' in import.meta.env)) {
+  ensureEnvVarExists('VITE_BANKSHEET_API_URL or VITE_QUADRATIC_API_URL');
+}
+if (!('VITE_BANKSHEET_MULTIPLAYER_URL' in import.meta.env || 'VITE_QUADRATIC_MULTIPLAYER_URL' in import.meta.env)) {
+  ensureEnvVarExists('VITE_BANKSHEET_MULTIPLAYER_URL or VITE_QUADRATIC_MULTIPLAYER_URL');
+}
+// Connection URL is only required in production (service doesn't run in local dev)
+if (VITE_AUTH_TYPE !== 'local') {
+  if (!('VITE_BANKSHEET_CONNECTION_URL' in import.meta.env || 'VITE_QUADRATIC_CONNECTION_URL' in import.meta.env)) {
+    ensureEnvVarExists('VITE_BANKSHEET_CONNECTION_URL or VITE_QUADRATIC_CONNECTION_URL');
+  }
+}
 
 // File limits - defaults to 5 if not set
 export const VITE_MAX_EDITABLE_FILES = Number(import.meta.env.VITE_MAX_EDITABLE_FILES) || 5;

@@ -4,7 +4,7 @@ import type { JSX } from 'react';
 export const messages: Record<string, JSX.Element | string> = {
   negative_offsets: (
     <span>
-      Quadratic no longer supports zero or negative rows and columns. The data in your file was shifted. You may need to
+      BankSheet no longer supports zero or negative rows and columns. The data in your file was shifted. You may need to
       update Python or Javascript code to reflect this change. See{' '}
       <a
         className="underline"

@@ -16,7 +16,7 @@ export function DashboardHeader({
   titleEnd?: ReactNode;
 }) {
   useEffect(() => {
-    document.title = `${title} - Quadratic`;
+    document.title = `${title} - Banksheet`;
   }, [title]);
 
   return (

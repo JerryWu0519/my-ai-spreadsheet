@@ -90,7 +90,7 @@ export const FileProvider = ({ children }: { children: React.ReactElement }) => 
 
   // When the file name changes, update document title and sync to server
   useEffect(() => {
-    document.title = `${name} - Quadratic`;
+    document.title = `${name} - Banksheet`;
   }, [name]);
 
   // Set the permission in recoil based on the initial state

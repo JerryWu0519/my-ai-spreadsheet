@@ -133,7 +133,7 @@ export function NewFileButton() {
                 <ExamplesIcon className="mr-3 text-primary" />
                 <span className="flex flex-col">
                   Templates
-                  <span className="text-xs text-muted-foreground">Files from the Quadratic team</span>
+                  <span className="text-xs text-muted-foreground">Files from the BankSheet team</span>
                 </span>
               </Link>
             </DropdownMenuItem>

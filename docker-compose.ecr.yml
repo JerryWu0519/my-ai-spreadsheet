@@ -6,7 +6,7 @@ services:
   quadratic-client:
     image: ${ECR_URL}/quadratic-client:${IMAGE_TAG}
 
-  quadratic-api:
+  banksheet-api:
     image: ${ECR_URL}/quadratic-api:${IMAGE_TAG}
 
   quadratic-multiplayer:

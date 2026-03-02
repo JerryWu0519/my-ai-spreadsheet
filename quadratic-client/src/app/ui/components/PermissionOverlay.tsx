@@ -36,7 +36,7 @@ export function PermissionOverlay() {
     return (
       <FixedBottomAlert>
         <Type>
-          <strong>Welcome to Quadratic.</strong>
+          <strong>Welcome to BankSheet.</strong>
         </Type>
         <div className="flex flex-shrink-0 gap-2">
           <Button asChild variant="outline" size="sm">

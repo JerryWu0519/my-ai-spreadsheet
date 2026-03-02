@@ -36,8 +36,8 @@ export const helpActionsSpec: HelpActionSpec = {
     },
   },
   [Action.HelpQuadratic101]: {
-    label: () => 'Quadratic 101',
-    labelVerbose: 'Visit Quadratic 101',
+    label: () => 'BankSheet 101',
+    labelVerbose: 'Visit BankSheet 101',
     Icon: ExternalLinkIcon,
     run: () => {
       openLink('https://www.quadratichq.com/quadratic-101');

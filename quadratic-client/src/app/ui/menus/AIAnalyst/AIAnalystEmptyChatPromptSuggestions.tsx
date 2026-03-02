@@ -28,12 +28,12 @@ import { useRecoilValue, useSetRecoilState } from 'recoil';
 // Default suggestions shown when the sheet is empty
 const defaultPromptSuggestions = [
   {
-    label: 'What can you help me with in Quadratic?',
-    prompt: 'What can you help me with in Quadratic?',
+    label: 'What can you help me with in BankSheet?',
+    prompt: 'What can you help me with in BankSheet?',
   },
   {
-    label: 'Help me build a chart in Quadratic. If there is no data, add some sample data and then plot it.',
-    prompt: 'Help me build a chart in Quadratic. If there is no data, add some sample data and then plot it.',
+    label: 'Help me build a chart in BankSheet. If there is no data, add some sample data and then plot it.',
+    prompt: 'Help me build a chart in BankSheet. If there is no data, add some sample data and then plot it.',
   },
   {
     label: 'Search the web for the top 10 tech companies by market cap and add them to my sheet.',

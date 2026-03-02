@@ -48,8 +48,8 @@ export const fileActionsSpec: FileActionSpec = {
     },
   },
   [Action.FileDownload]: {
-    label: () => 'Quadratic (.grid)',
-    labelVerbose: 'Download as Quadratic (.grid)',
+    label: () => 'BankSheet (.grid)',
+    labelVerbose: 'Download as BankSheet (.grid)',
     isAvailable: isAvailableBecauseLoggedIn,
     run: async ({ name, uuid }: FileActionArgs[Action.FileDownload]) => {
       if (!pixiAppSettings.setEditorInteractionState) return;

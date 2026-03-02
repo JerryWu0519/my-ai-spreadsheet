@@ -300,7 +300,7 @@ export const ErrorBoundary = () => {
       return (
         <EmptyPage
           title="License Revoked"
-          description="Your license has been revoked. Please contact Quadratic Support."
+          description="Your license has been revoked. Please contact BankSheet Support."
           Icon={InfoCircledIcon}
           actions={actionsLicenseRevoked}
         />

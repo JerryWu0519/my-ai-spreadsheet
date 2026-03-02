@@ -5,65 +5,67 @@
 @layer base {
   :root,
   [data-theme='blue'] {
-    /* Default background color of <body />...etc */
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    /* Background color for <Card /> */
+    /* ── Banksheet Redesign Tokens ── */
+    --background: 220 20% 99%;
+    --foreground: 230 25% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    /* Background color for popovers such as <DropdownMenu />, <HoverCard />, <Popover /> */
+    --card-foreground: 230 25% 10%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    /* Primary colors for <Button /> */
+    --popover-foreground: 230 25% 10%;
+    /* Primary: deep navy-blue for interactive elements */
     --primary: 221.2 83.2% 53.3%;
     --primary-foreground: 210 40% 98%;
-    /* Secondary colors for <Button /> */
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    /* Muted backgrounds such as <TabsList />, <Skeleton /> and <Switch /> */
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    /* Used for accents such as hover effects on <DropdownMenuItem>, <SelectItem>...etc */
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --warning: 21 90% 48%; /* orange-600 */
-    --warning-foreground: 33 100% 96%; /* orange-50 */
+    /* Secondary: soft neutral surfaces */
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 230 20% 15%;
+    /* Muted */
+    --muted: 220 16% 96%;
+    --muted-foreground: 220 9% 46%;
+    /* Accent: hover / active backgrounds */
+    --accent: 220 16% 96%;
+    --accent-foreground: 230 20% 15%;
+    --warning: 21 90% 48%;
+    --warning-foreground: 33 100% 96%;
     --success: 142.1 76.2% 36.3%;
     --success-foreground: 355.7 100% 97.3%;
-    /* Used for destructive actions such as <Button variant="destructive"> */
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 84.2% 97.3%;
-    /* Default border color */
-    --border: 214.3 31.8% 91.4%;
-    /* Border color for inputs such as <Input />, <Select />, <Textarea /> */
-    --input: 214.3 31.8% 91.4%;
+    /* Softer borders */
+    --border: 220 16% 90%;
+    --input: 220 16% 90%;
     --ring: 221.2 83.2% 53.3%;
-    /* Border radius for card, input and buttons */
-    --radius: 0.3rem;
+    /* Slightly larger radius for modern feel */
+    --radius: 0.5rem;
 
     /* Sheet Table Colors */
     --table-column-header-foreground: 0 0% 0%;
-    --table-alternating-background: 220 75% 98%;
+    --table-alternating-background: 220 40% 98%;
+
+    /* ── Banksheet Custom Properties ── */
+    --sidebar-bg: 220 20% 97%;
+    --toolbar-bg: 0 0% 100%;
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+    --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
   }
 
   .dark,
   .dark[data-theme='blue'] {
-    --background: 222.2 84% 4.9%;
+    --background: 228 20% 6%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
+    --card: 228 20% 8%;
     --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
+    --popover: 228 20% 8%;
     --popover-foreground: 210 40% 98%;
     --primary: 217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 10.5%;
+    --secondary: 217.2 32.6% 12%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 10.5%;
+    --muted: 217.2 32.6% 12%;
     --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 10.5%;
+    --accent: 217.2 32.6% 12%;
     --accent-foreground: 210 40% 98%;
-    --warning: 27 96% 61%; /* TODO: really should get rid of these for themeing orange-400 */
-    --warning-foreground: 13 81% 15%; /* orange-950 */
+    --warning: 27 96% 61%;
+    --warning-foreground: 13 81% 15%;
     --success: 142.1 70.6% 45.3%;
     --success-foreground: 144.9 80.4% 10%;
     --destructive: 0 72.2% 50.6%;
@@ -71,6 +73,11 @@
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 224.3 76.3% 48%;
+
+    --sidebar-bg: 228 20% 7%;
+    --toolbar-bg: 228 20% 8%;
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
 }
 

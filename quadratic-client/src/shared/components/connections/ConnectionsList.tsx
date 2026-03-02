@@ -202,7 +202,7 @@ function ListItems({
                       </span>
 
                       {isDemo ? (
-                        <span className="text-xs text-muted-foreground">Maintained by the Quadratic team</span>
+                        <span className="text-xs text-muted-foreground">Maintained by the BankSheet team</span>
                       ) : (
                         <time dateTime={createdDate} className="text-xs text-muted-foreground">
                           Created {timeAgo(createdDate)}
@@ -223,7 +223,7 @@ function ListItems({
                       </span>
 
                       {isDemo ? (
-                        <span className="text-xs text-muted-foreground">Maintained by the Quadratic team</span>
+                        <span className="text-xs text-muted-foreground">Maintained by the BankSheet team</span>
                       ) : (
                         <time dateTime={createdDate} className="text-xs text-muted-foreground">
                           Created {timeAgo(createdDate)}

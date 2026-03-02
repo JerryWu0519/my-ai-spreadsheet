@@ -1,5 +1,7 @@
 {
-  "name": "quadratic",
+  "name": "banksheet",
+  "description": "BankSheet monorepo: AI-powered spreadsheet platform.",
+  "homepage": "https://banksheet.app",
   "version": "0.23.11",
   "author": {
     "name": "David Kircos",

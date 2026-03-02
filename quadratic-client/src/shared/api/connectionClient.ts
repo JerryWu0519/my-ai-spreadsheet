@@ -130,6 +130,8 @@ export const connectionClient = {
   },
   staticIps: {
     list: async (): Promise<string[] | null> => {
+      // Skip when the connection service isn't available (local dev)
+      if (!API_URL) return null;
       try {
         const res = await fetch(`${API_URL}/static-ips`, {
           method: 'GET',
@@ -139,6 +141,8 @@ export const connectionClient = {
         const { static_ips } = StaticIpsSchema.parse(data) as StaticIpsResponse;
         return static_ips;
       } catch (err) {
+        // Silently return null in local dev when connection service is unreachable
+        if (import.meta.env.DEV) return null;
         console.error('Failed to get the static ips from the connection service', err);
         return null;
       }

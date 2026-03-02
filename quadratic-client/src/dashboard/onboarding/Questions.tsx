@@ -7,6 +7,7 @@ import {
 } from '@/dashboard/onboarding/Controls';
 import { useOnboardingLoaderData } from '@/routes/teams.$teamUuid.onboarding';
 // import { connectionsByType, potentialConnectionsByType } from '@/shared/components/connections/connectionsByType';
+import { BanksheetLogo } from '@/shared/components/BanksheetLogo';
 import { ArrowRightIcon, DesktopIcon, EducationIcon, PersonalIcon, WorkIcon } from '@/shared/components/Icons';
 import { Button } from '@/shared/shadcn/ui/button';
 import { Input } from '@/shared/shadcn/ui/input';
@@ -66,7 +67,7 @@ export const questionsById: Record<
   QuestionProps & { Form: (props: QuestionProps & { id: string }) => React.ReactNode }
 > = {
   use: {
-    title: 'How will you use Quadratic?',
+    title: 'How will you use BankSheet?',
     subtitle: 'Your answers help personalize your experience.',
     Form: (props) => {
       const [searchParams] = useSearchParams();
@@ -78,11 +79,11 @@ export const questionsById: Record<
 
       if (isMobile) {
         return (
-          <Question title="Welcome to Quadratic!">
+          <Question title="Welcome to Banksheet!">
             <QuestionForm>
               <div className="flex flex-col items-center gap-4 px-6 text-center">
                 <DesktopIcon size="2xl" className="text-muted-foreground" />
-                <p className="text-lg text-muted-foreground">Quadratic is view only on mobile.</p>
+                <p className="text-lg text-muted-foreground">BankSheet is view only on mobile.</p>
                 <p className="text-lg text-muted-foreground">Please switch to a laptop or desktop to get started.</p>
               </div>
               <input type="hidden" name={props.id} value="" />
@@ -333,7 +334,7 @@ export const questionsById: Record<
   },
   'team-invites[]': {
     title: 'Who would you like to invite to your team?',
-    subtitle: 'Quadratic is better with your team. We’ll send them an invite.',
+    subtitle: 'BankSheet is better with your team. We’ll send them an invite.',
     Form: (props) => {
       const [values, setValues] = useState<string[]>(Array(4).fill(''));
       const [searchParams] = useSearchParams();
@@ -395,7 +396,7 @@ export const questionsById: Record<
     },
   },
   'referral-source': {
-    title: 'How did you hear about Quadratic?',
+    title: 'How did you hear about BankSheet?',
     Form: (props) => {
       const [other, setOther] = useRecoilState(otherCheckboxAtom);
       const [searchParams] = useSearchParams();
@@ -473,7 +474,7 @@ export const questionsById: Record<
                 loading={isSubmittingFree}
                 onClick={() => trackNextQuestionClick(props.id)}
               >
-                Use Quadratic for free
+                Use BankSheet for free
               </Button>
             </FreePlan>
             <ProPlan className={className}>
@@ -565,16 +566,7 @@ export function Questions() {
 }
 
 function Logo() {
-  const className = 'h-5 w-5 bg-border transition-colors';
-  return (
-    <div className="inline-grid grid-cols-2 justify-center gap-0.5">
-      <div className={cn(className, 'justify-self-end', 'bg-[#CB8999]')} />
-      <div className={cn(className, 'bg-[#8ECB89]')} />
-      <div className={cn(className, 'justify-self-end', 'bg-[#5D576B]')} />
-      <div className={cn(className, 'bg-[#6CD4FF]')} />
-      <div className={cn(className, 'col-start-2', 'bg-[#FFC800]')} />
-    </div>
-  );
+  return <BanksheetLogo size={32} className="text-foreground" />;
 }
 
 function Question({ children, title, subtitle }: { children: React.ReactNode; title: string; subtitle?: string }) {

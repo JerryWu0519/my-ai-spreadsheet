@@ -49,13 +49,13 @@ export const QuadraticSidebar = () => {
   const canViewTeam = isAvailableArgs.teamPermissions?.includes('TEAM_VIEW');
 
   return (
-    <nav className="hidden h-full w-12 flex-shrink-0 flex-col border-r border-border bg-accent md:flex">
+    <nav className="hidden h-full w-12 flex-shrink-0 flex-col border-r border-border bg-[hsl(var(--sidebar-bg))] md:flex">
       <div className="flex h-12 items-center justify-center border-b border-border">
         <SidebarTooltip label="Back to dashboard">
           <Link
             to="/"
             reloadDocument
-            className="group relative flex h-9 w-9 items-center justify-center rounded text-muted-foreground hover:bg-border"
+            className="group relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
             data-testid="back-to-dashboard-link"
           >
             <QuadraticLogo />
@@ -136,7 +136,7 @@ export const SidebarToggle = React.forwardRef<HTMLButtonElement, React.Component
         {...props}
         ref={ref}
         className={cn(
-          'relative h-9 w-9 rounded text-muted-foreground hover:bg-border hover:text-foreground aria-pressed:bg-border data-[state=open]:bg-border',
+          'relative h-9 w-9 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground data-[state=open]:bg-accent',
           props.className
         )}
       >
