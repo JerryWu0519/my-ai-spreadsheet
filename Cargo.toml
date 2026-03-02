@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+  "quadratic-connection",
+  "quadratic-core",
+  "quadratic-cloud-controller",
+  "quadratic-cloud-worker",
+  "quadratic-core-cloud",
+  "quadratic-files",
+  "quadratic-multiplayer",
+  "quadratic-rust-shared",
+]
+exclude = ["poc/number_type", "dev-rust"]
+
+[workspace.package]
+authors = ["Quadratic"]
+edition = "2024"
+description = "Infinite data grid with Python, JavaScript, and SQL built-in"
+repository = "https://github.com/quadratichq/quadratic"
+license-file = "LICENSE"
+version = "0.23.11"
+
+[workspace.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[patch.crates-io]
+# Removed getrandom patch to allow crates.io versions (v0.4.x) to be used
+# when needed. Patching the crate caused mismatched versions for dependencies
+# (for example uuid -> getrandom@0.4.1), which led to compile errors for
+# WebAssembly targets when wasm_js wasn't enabled. Keeping patches for
+# getrandom here prevented enabling the correct features across versions.
+
+[profile.release]
+opt-level = "s"

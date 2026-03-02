@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2024",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "esModuleInterop": false,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ES2024"],
+    "allowJs": false,
+    "allowSyntheticDefaultImports": true,
+    "noFallthroughCasesInSwitch": true,
+    "moduleResolution": "Node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "downlevelIteration": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "quadratic-shared/*": ["../quadratic-shared/*"],
+      "quadratic-shared": ["../quadratic-shared"]
+    },
+    "types": ["vitest/importMeta"]
+  }
+}

@@ -1,0 +1,10 @@
+[target.wasm32-unknown-unknown]
+linker = "/opt/homebrew/opt/llvm/bin/clang"
+rustflags = [
+    "--cfg", "getrandom_backend=\"wasm_js\"",
+    "-C", "linker-flavor=gcc",
+]
+
+[env]
+CC = "/opt/homebrew/opt/llvm/bin/clang"
+AR = "/opt/homebrew/opt/llvm/bin/llvm-ar"
