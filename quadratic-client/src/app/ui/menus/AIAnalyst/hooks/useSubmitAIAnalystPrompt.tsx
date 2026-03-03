@@ -485,30 +485,51 @@ export function useSubmitAIAnalystPrompt() {
                   const aiTool = toolCall.name as AITool;
                   const argsObject = toolCall.arguments ? JSON.parse(toolCall.arguments) : {};
 
-                  // Use cached grounding (persists across iterations)
-                  const groundingUrls = cachedGroundingUrls;
-                  const groundingSupports = cachedGroundingSupports;
-                  const responseText = cachedResponseText;
+                  // Save server-side injected source URLs BEFORE Zod strips them
+                  const rawSourceUrls = argsObject._sourceUrls;
+                  const rawResponseText = argsObject._responseText;
+                  const rawGroundingSupports = argsObject._groundingSupports;
 
-                  if (groundingUrls.length > 0 || responseText) {
-                    argsObject._sourceUrls = groundingUrls;
-                    argsObject._responseText = responseText;
-                    argsObject._groundingSupports = groundingSupports;
+                  // Prefer client-extracted grounding (from SSE content), fall back to
+                  // server-injected (from tool call args) — belt-and-suspenders approach
+                  const effectiveUrls =
+                    cachedGroundingUrls.length > 0
+                      ? cachedGroundingUrls
+                      : Array.isArray(rawSourceUrls) && rawSourceUrls.length > 0
+                        ? rawSourceUrls
+                        : [];
+                  const effectiveText = cachedResponseText || rawResponseText || '';
+                  const effectiveSupports =
+                    cachedGroundingSupports.length > 0
+                      ? cachedGroundingSupports
+                      : Array.isArray(rawGroundingSupports) && rawGroundingSupports.length > 0
+                        ? rawGroundingSupports
+                        : [];
+
+                  if (effectiveUrls.length > 0 || effectiveText) {
+                    argsObject._sourceUrls = effectiveUrls;
+                    argsObject._responseText = effectiveText;
+                    argsObject._groundingSupports = effectiveSupports;
                   }
 
                   // Save _provenance before Zod strips it
                   const rawProvenance = argsObject._provenance;
+                  // Save _assumptionPack from 3-role orchestrator before Zod strips it
+                  const rawAssumptionPack = argsObject._assumptionPack;
 
                   const args = aiToolsSpec[aiTool].responseSchema.parse(argsObject);
 
-                  // Re-inject ALL extra fields after Zod parse
-                  if (groundingUrls.length > 0 || responseText) {
-                    (args as any)._sourceUrls = groundingUrls;
-                    (args as any)._responseText = responseText;
-                    (args as any)._groundingSupports = groundingSupports;
+                  // Re-inject ALL extra fields after Zod parse (Zod strips unknown keys)
+                  if (effectiveUrls.length > 0 || effectiveText) {
+                    (args as any)._sourceUrls = effectiveUrls;
+                    (args as any)._responseText = effectiveText;
+                    (args as any)._groundingSupports = effectiveSupports;
                   }
                   if (rawProvenance) {
                     (args as any)._provenance = rawProvenance;
+                  }
+                  if (rawAssumptionPack) {
+                    (args as any)._assumptionPack = rawAssumptionPack;
                   }
 
                   const toolResultContent = await aiToolsActions[aiTool](args as any, {

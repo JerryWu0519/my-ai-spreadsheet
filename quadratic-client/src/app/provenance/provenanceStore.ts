@@ -21,6 +21,14 @@ class ProvenanceStore {
   set(sheetId: string, x: number, y: number, provenance: Provenance): void {
     const key = makeProvenanceCellKey(sheetId, x, y);
     this.store.set(key, provenance);
+    console.log(
+      '[provenanceStore] SET:',
+      key,
+      '→ sourceUrl:',
+      provenance.sourceUrl?.slice(0, 60),
+      'store.size:',
+      this.store.size
+    );
     events.emit('provenanceChanged', key);
   }
 

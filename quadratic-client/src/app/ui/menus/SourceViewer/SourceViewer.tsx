@@ -27,23 +27,67 @@ import { useRecoilState, useRecoilValue } from 'recoil';
  * in the rendered DOM text content. We try multiple number scales
  * (raw, thousands, millions, billions) because SEC filings typically
  * report numbers in millions.
+ *
+ * Returns { valueTerms, labelTerms } so the finder script can do
+ * CONTEXT-AWARE search: first find the label, then find the value
+ * NEAR the label (same table row or nearby).
+ *
+ * filingLabel takes PRIORITY over cellLabel — it's the exact text
+ * from the SEC filing (e.g. "Operating income") rather than the
+ * spreadsheet label (e.g. "EBIT").
  */
-function buildSearchTerms(cellValue?: string, cellLabel?: string): string[] {
-  const terms: string[] = [];
-  if (!cellValue) return terms;
+interface SearchTerms {
+  valueTerms: string[];
+  labelTerms: string[];
+  evidenceSnippet?: string;
+}
+
+function buildSearchTerms(
+  cellValue?: string,
+  cellLabel?: string,
+  filingLabel?: string,
+  evidenceSnippet?: string
+): SearchTerms {
+  const valueTerms: string[] = [];
+  const labelTerms: string[] = [];
+
+  // Filing label is the PRIMARY label — it's what actually appears in the document
+  if (filingLabel && filingLabel.length > 2) {
+    labelTerms.push(filingLabel);
+    // Case variation
+    const lower = filingLabel.charAt(0) + filingLabel.slice(1).toLowerCase();
+    if (lower !== filingLabel && !labelTerms.includes(lower)) labelTerms.push(lower);
+    // Also try all-lowercase
+    const allLower = filingLabel.toLowerCase();
+    if (!labelTerms.includes(allLower)) labelTerms.push(allLower);
+  }
+
+  // Cell label as SECONDARY (fallback if filing label not provided)
+  if (cellLabel && cellLabel.length > 2) {
+    // Only add if it's different from filing label
+    if (!filingLabel || cellLabel.toLowerCase() !== filingLabel.toLowerCase()) {
+      labelTerms.push(cellLabel);
+      const lower = cellLabel.charAt(0) + cellLabel.slice(1).toLowerCase();
+      if (lower !== cellLabel && !labelTerms.includes(lower)) labelTerms.push(lower);
+    }
+  }
+
+  if (!cellValue) {
+    return { valueTerms, labelTerms };
+  }
 
   const raw = String(cellValue)
     .replace(/[$,\s]/g, '')
     .trim();
 
   // Non-numeric → just search for the text itself
-  if (!/^\d+(\.\d+)?$/.test(raw)) {
-    if (raw.length > 3) terms.push(raw);
-    return terms;
+  if (!/^-?\d+(\.\d+)?$/.test(raw)) {
+    if (raw.length > 3) valueTerms.push(raw);
+    return { valueTerms, labelTerms };
   }
 
-  const num = parseFloat(raw);
-  if (isNaN(num) || num === 0) return terms;
+  const num = Math.abs(parseFloat(raw));
+  if (isNaN(num) || num === 0) return { valueTerms, labelTerms };
 
   const withCommas = (n: number) => {
     const parts = n.toString().split('.');
@@ -51,120 +95,469 @@ function buildSearchTerms(cellValue?: string, cellLabel?: string): string[] {
     return parts.join('.');
   };
 
-  const scales = [1, 1000, 1_000_000, 1_000_000_000];
-  for (const div of scales) {
+  // Helper: add a number with comma and no-comma variants
+  const addNumber = (n: number, skipShort = false) => {
+    const rounded = Math.round(n * 100) / 100;
+    const formatted = withCommas(rounded);
+    if (skipShort && formatted.length < 3) return;
+    if (!valueTerms.includes(formatted)) valueTerms.push(formatted);
+    const noCommas = rounded.toString();
+    if (noCommas !== formatted && noCommas.length >= 3 && !valueTerms.includes(noCommas)) valueTerms.push(noCommas);
+    // Also add integer version for numbers close to whole (e.g., 81462.0 → 81462)
+    if (Math.abs(rounded - Math.round(rounded)) < 0.01) {
+      const intStr = Math.round(rounded).toString();
+      const intFormatted = withCommas(Math.round(rounded));
+      if (!valueTerms.includes(intFormatted) && intFormatted.length >= 3) valueTerms.push(intFormatted);
+      if (intStr !== intFormatted && !valueTerms.includes(intStr) && intStr.length >= 3) valueTerms.push(intStr);
+    }
+  };
+
+  // Direct value (as typed in cell)
+  addNumber(num);
+
+  // SEC filings commonly report in millions or thousands — try DIVIDING by scales
+  const divScales = [1000, 1_000_000, 1_000_000_000];
+  for (const div of divScales) {
     const scaled = num / div;
-    if (scaled >= 1 && (scaled === Math.floor(scaled) || Math.abs(scaled - Math.round(scaled * 100) / 100) < 0.001)) {
-      const rounded = Math.round(scaled * 100) / 100;
-      const formatted = withCommas(rounded);
-      // Skip very short numbers from scaled results to avoid false positives
-      if (formatted.length < 4 && div > 1) continue;
-      terms.push(formatted);
-      // Also add without commas if different
-      const noCommas = rounded.toString();
-      if (noCommas !== formatted && noCommas.length >= 4) terms.push(noCommas);
+    if (scaled >= 1 && scaled < 10_000_000) {
+      addNumber(scaled, true);
     }
   }
 
-  // Add label as a secondary search term
-  if (cellLabel && cellLabel.length > 2) terms.push(cellLabel);
+  // ALSO try MULTIPLYING by scales — cell value may be in billions, filing in millions
+  const mulScales = [1000, 1_000_000, 1_000_000_000];
+  for (const mult of mulScales) {
+    const scaled = num * mult;
+    if (scaled >= 100 && scaled < 10_000_000_000_000) {
+      addNumber(scaled, true);
+      for (const delta of [-2, -1, 1, 2]) {
+        const nearby = Math.round(scaled) + delta;
+        const nearbyFmt = withCommas(nearby);
+        if (!valueTerms.includes(nearbyFmt) && nearbyFmt.length >= 4) valueTerms.push(nearbyFmt);
+      }
+    }
+  }
 
-  return terms;
+  // Also add the raw integer value (no commas, no decimals) for direct match
+  const intStr = Math.round(num).toString();
+  if (intStr.length >= 4 && !valueTerms.includes(intStr)) {
+    valueTerms.push(intStr);
+  }
+
+  // Add with parentheses (negative number convention in filings)
+  if (parseFloat(raw) < 0) {
+    const formatted = withCommas(num);
+    valueTerms.push(`(${formatted})`);
+  }
+
+  return { valueTerms, labelTerms, evidenceSnippet: evidenceSnippet || undefined };
 }
 
 /**
  * Build a <script> that runs inside the iframe AFTER the document loads.
- * It uses TreeWalker to find text nodes containing the search terms,
- * wraps the first match in a <mark> element, and scrolls to it.
- * This is much more reliable than regex on raw HTML because:
- *   - The DOM decodes HTML entities (&#160; → actual nbsp)
- *   - TreeWalker skips inside tags, style, script etc.
- *   - Works with XBRL <ix:nonFraction> wrappers
+ *
+ * TABLE-ROW VALIDATED search (v3):
+ *   1. Find ALL occurrences of the cell VALUE in the document.
+ *   2. For each occurrence, extract the non-numeric label text from the
+ *      same <tr> (table row).
+ *   3. Score how well that row label matches the expected label
+ *      (filing_label, then cellLabel).
+ *   4. Highlight the BEST match — the one where BOTH value AND label
+ *      appear in the same row.
+ *   5. Fallback: if no value found, scroll to the label section only.
+ *   6. Communicate match confidence back to parent via postMessage.
+ *
+ * Validation checks:
+ *   - The highlighted row's description MUST match the cell's label/metric
+ *   - The highlighted value MUST match the cell value
+ *   - If either check fails, confidence drops and the user sees a warning
  */
-function buildFinderScript(searchTerms: string[], highlightTexts: string[]): string {
-  // Combine: value-based terms first, then text anchors
-  const allTerms = [...searchTerms, ...highlightTexts.filter((t) => t && t.length > 10).map((t) => t.slice(0, 80))];
+function buildFinderScript(searchTerms: SearchTerms, highlightTexts: string[]): string {
+  const { valueTerms, labelTerms, evidenceSnippet } = searchTerms;
+  const extraValueTerms = highlightTexts.filter((t) => t && t.length > 10).map((t) => t.slice(0, 80));
+  const allValueTerms = [...valueTerms, ...extraValueTerms];
 
-  if (allTerms.length === 0) return '';
+  if (allValueTerms.length === 0 && labelTerms.length === 0 && !evidenceSnippet) return '';
 
-  // Escape for embedding in a JS string inside HTML
-  const termsJson = JSON.stringify(allTerms);
+  const valueJson = JSON.stringify(allValueTerms);
+  const labelJson = JSON.stringify(labelTerms);
+  // Evidence snippet: the exact row text from the filing table (e.g., "Total revenues: 97,690 | 81,462")
+  // Extract the label part (before the colon) as a HIGH-PRIORITY search term
+  const evidenceLabel = evidenceSnippet ? evidenceSnippet.split(':')[0].trim() : '';
+  const evidenceLabelJson = JSON.stringify(evidenceLabel);
 
   return `
 <script>
 (function() {
-  var terms = ${termsJson};
+  var valueTerms = ${valueJson};
+  var labelTerms = ${labelJson};
+  var evidenceLabel = ${evidenceLabelJson};
   var MARK_STYLE = 'background:#fde047;padding:2px 4px;border-radius:3px;scroll-margin-top:120px;';
   var found = false;
 
+  // If we have an evidence label from StatementMap, prepend it as highest-priority label
+  if (evidenceLabel && evidenceLabel.length > 2) {
+    // Insert at the front so it's tried first
+    labelTerms = [evidenceLabel].concat(labelTerms.filter(function(l) {
+      return l.toLowerCase() !== evidenceLabel.toLowerCase();
+    }));
+  }
+
+  function norm(s) {
+    return s.replace(/[\\u00A0\\u2007\\u202F\\u2009\\u200A\\u2002\\u2003]/g, ' ')
+            .replace(/\\s+/g, ' ');
+  }
+
+  function isWordBoundary(text, pos) {
+    if (pos < 0 || pos >= text.length) return true;
+    return !/[a-zA-Z0-9]/.test(text.charAt(pos));
+  }
+
+  function findInNode(node, term) {
+    var text = norm(node.textContent);
+    var normTerm = norm(term);
+    var needsWB = normTerm.length < 8 && /^[a-zA-Z]/.test(normTerm);
+
+    for (var si = 0; si < 2; si++) {
+      var sText = si === 0 ? text : text.toLowerCase();
+      var sTerm = si === 0 ? normTerm : normTerm.toLowerCase();
+      var startPos = 0;
+      while (true) {
+        var idx = sText.indexOf(sTerm, startPos);
+        if (idx === -1) break;
+        if (needsWB && (!isWordBoundary(text, idx - 1) || !isWordBoundary(text, idx + normTerm.length))) {
+          startPos = idx + 1;
+          continue;
+        }
+        var origText = node.textContent;
+        var origIdx = origText.indexOf(term);
+        if (origIdx === -1) origIdx = origText.toLowerCase().indexOf(term.toLowerCase());
+        if (origIdx !== -1) return { idx: origIdx, len: term.length };
+        return { idx: Math.min(idx, Math.max(0, origText.length - normTerm.length)), len: normTerm.length };
+      }
+    }
+
+    var noComma = normTerm.replace(/,/g, '');
+    if (noComma !== normTerm && noComma.length >= 3) {
+      var ncText = text.replace(/,/g, '');
+      var idx2 = ncText.indexOf(noComma);
+      if (idx2 === -1) idx2 = ncText.toLowerCase().indexOf(noComma.toLowerCase());
+      if (idx2 !== -1) {
+        var pat = noComma.split('').map(function(ch) {
+          if (/\\d/.test(ch)) return ch + '[,\\\\s\\u00A0]?';
+          return ch.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+        }).join('');
+        var m = new RegExp(pat, 'i').exec(node.textContent);
+        if (m) return { idx: m.index, len: m[0].length };
+      }
+    }
+    return null;
+  }
+
+  function closestTr(node) {
+    var el = node.nodeType === 1 ? node : node.parentElement;
+    for (var i = 0; i < 10 && el; i++) {
+      if (el.tagName === 'TR') return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // Extract NON-NUMERIC label text from a table row
+  function getRowLabel(tr) {
+    if (!tr) return '';
+    var cells = tr.querySelectorAll('td, th');
+    var parts = [];
+    for (var i = 0; i < cells.length; i++) {
+      var t = cells[i].textContent.trim().replace(/\\s+/g, ' ');
+      if (t && !/^[\\s$()0-9,.\\/\\-\\u2014\\u2013%]*$/.test(t)) {
+        parts.push(t);
+      }
+    }
+    return parts.join(' ');
+  }
+
+  // Score how well rowText matches our expected label terms (0-100, or -1 if no labels)
+  function scoreLabelMatch(text) {
+    if (!text || labelTerms.length === 0) return -1;
+    var tl = text.toLowerCase();
+    for (var i = 0; i < labelTerms.length; i++) {
+      var lt = labelTerms[i].toLowerCase();
+      if (tl === lt) return 100 - i * 3;
+      if (tl.indexOf(lt) !== -1) return 90 - i * 3;
+      if (lt.indexOf(tl) !== -1 && tl.length > 4) return 75 - i * 3;
+      var words = lt.split(/\\s+/).filter(function(w) { return w.length > 2; });
+      if (words.length > 0) {
+        var matched = 0;
+        for (var w = 0; w < words.length; w++) {
+          if (tl.indexOf(words[w]) !== -1) matched++;
+        }
+        if (matched >= Math.ceil(words.length * 0.6)) return 65 - i * 3;
+        if (matched >= Math.ceil(words.length * 0.4)) return 45 - i * 3;
+      }
+    }
+    return 0;
+  }
+
+  function doHighlight(cand) {
+    try {
+      var range = document.createRange();
+      range.setStart(cand.node, Math.max(0, cand.idx));
+      range.setEnd(cand.node, Math.min(cand.node.textContent.length, cand.idx + cand.len));
+      var mark = document.createElement('mark');
+      mark.setAttribute('style', MARK_STYLE);
+      mark.id = 'qd-highlight';
+      try {
+        range.surroundContents(mark);
+      } catch (surErr) {
+        // surroundContents fails when the range spans across element boundaries
+        // (common in XBRL filings with <ix:nonFraction> tags).
+        // Fallback: insert the mark at the start of the range and scroll to it.
+        var nearestEl = cand.node.parentElement;
+        if (nearestEl) {
+          nearestEl.setAttribute('style', MARK_STYLE);
+          nearestEl.id = 'qd-highlight';
+        }
+      }
+      setTimeout(function() {
+        var el = document.getElementById('qd-highlight');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.style.transition = 'background 0.3s';
+          setTimeout(function() { el.style.background = '#facc15'; }, 800);
+          setTimeout(function() { el.style.background = '#fde047'; }, 1200);
+          setTimeout(function() { el.style.background = '#facc15'; }, 1600);
+          setTimeout(function() { el.style.background = '#fde047'; }, 2000);
+        }
+      }, 100);
+      found = true;
+      return true;
+    } catch (e) {
+      // Last resort: try to scroll to the parent element
+      try {
+        var fallbackEl = cand.node.parentElement || cand.parent;
+        if (fallbackEl) {
+          fallbackEl.setAttribute('style', MARK_STYLE);
+          fallbackEl.id = 'qd-highlight';
+          fallbackEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          found = true;
+          return true;
+        }
+      } catch(e2) {}
+      return false;
+    }
+  }
+
+  function sendResult(confidence, rowLabel, valueTerm) {
+    try {
+      window.parent.postMessage({
+        type: 'qd-match-result',
+        confidence: confidence,
+        rowLabel: rowLabel || '',
+        valueTerm: valueTerm || ''
+      }, '*');
+    } catch(e) {}
+  }
+
   function tryHighlight() {
     if (found) return;
-    var tw = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      null
-    );
-    // Try each term in priority order
-    for (var ti = 0; ti < terms.length; ti++) {
-      var term = terms[ti];
-      tw.currentNode = document.body;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 1: Find ALL value occurrences, score each by row-label context
+    // ═══════════════════════════════════════════════════════════════════
+    var candidates = [];
+    console.log('[QD] Searching. Values:', valueTerms.slice(0, 6), 'Labels:', labelTerms);
+
+    for (var vi = 0; vi < valueTerms.length; vi++) {
+      var term = valueTerms[vi];
+      if (!term || term.length < 2) continue;
+
+      var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
       var node;
       while ((node = tw.nextNode())) {
-        var idx = node.textContent.indexOf(term);
-        if (idx === -1) {
-          // Try case-insensitive for labels / text anchors
-          idx = node.textContent.toLowerCase().indexOf(term.toLowerCase());
+        var parent = node.parentElement;
+        if (!parent) continue;
+        var tag = parent.tagName;
+        if (tag === 'STYLE' || tag === 'SCRIPT' || tag === 'HEAD' || tag === 'NOSCRIPT') continue;
+
+        var match = findInNode(node, term);
+        if (!match) continue;
+
+        var tr = closestTr(node);
+        var isInTable = !!tr;
+        var rowLabel = getRowLabel(tr);
+        var labelScore = scoreLabelMatch(rowLabel);
+
+        // Check ±2 adjacent rows for section headers
+        if (labelScore <= 0 && tr && tr.parentElement) {
+          var adjText = '';
+          var prev = tr.previousElementSibling;
+          if (prev && prev.tagName === 'TR') adjText += ' ' + getRowLabel(prev);
+          var prev2 = prev ? prev.previousElementSibling : null;
+          if (prev2 && prev2.tagName === 'TR') adjText += ' ' + getRowLabel(prev2);
+          var next = tr.nextElementSibling;
+          if (next && next.tagName === 'TR') adjText += ' ' + getRowLabel(next);
+          if (adjText.trim()) {
+            var adjScore = scoreLabelMatch(adjText.trim());
+            if (adjScore > 0) labelScore = Math.max(adjScore - 25, 5);
+          }
         }
-        if (idx !== -1) {
-          // Skip nodes inside <style>, <script>, <head>
-          var parent = node.parentElement;
-          if (!parent) continue;
-          var tag = parent.tagName;
-          if (tag === 'STYLE' || tag === 'SCRIPT' || tag === 'HEAD') continue;
 
-          // Split the text node and wrap the match
-          var range = document.createRange();
-          range.setStart(node, idx);
-          range.setEnd(node, idx + term.length);
-          var mark = document.createElement('mark');
-          mark.setAttribute('style', MARK_STYLE);
-          mark.id = 'qd-highlight';
-          range.surroundContents(mark);
+        var score = 0;
+        if (labelScore > 0) score += labelScore;
+        if (isInTable) score += 15;
+        score += Math.max(0, 8 - vi * 2);
 
-          // Scroll to it
-          setTimeout(function() {
-            var el = document.getElementById('qd-highlight');
-            if (el) {
-              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              // Pulse animation
-              el.style.transition = 'background 0.3s';
-              setTimeout(function() { el.style.background = '#facc15'; }, 800);
-              setTimeout(function() { el.style.background = '#fde047'; }, 1200);
-              setTimeout(function() { el.style.background = '#facc15'; }, 1600);
-              setTimeout(function() { el.style.background = '#fde047'; }, 2000);
+        candidates.push({
+          node: node, idx: match.idx, len: match.len, parent: parent,
+          score: score, labelScore: labelScore, rowLabel: rowLabel,
+          isInTable: isInTable, valueTerm: term
+        });
+
+        if (score >= 95) break;
+      }
+      if (candidates.length > 0 && candidates[candidates.length - 1].score >= 95) break;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 2: Pick the best candidate (highest score)
+    // ═══════════════════════════════════════════════════════════════════
+    if (candidates.length > 0) {
+      candidates.sort(function(a, b) { return b.score - a.score; });
+      var best = candidates[0];
+      console.log('[QD] Best: score=' + best.score + ' labelScore=' + best.labelScore +
+                  ' row="' + best.rowLabel.slice(0, 60) + '" val="' + best.valueTerm + '"');
+
+      var conf;
+      if (best.labelScore >= 60) conf = 'verified';
+      else if (best.labelScore >= 30) conf = 'likely';
+      else if (best.labelScore > 0) conf = 'partial';
+      else if (best.isInTable && labelTerms.length === 0) conf = 'likely';
+      else conf = 'value_only';
+
+      sendResult(conf, best.rowLabel.slice(0, 120), best.valueTerm);
+      doHighlight(best);
+      return;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 3: No value found in text nodes — try searching <td> elements
+    // directly (XBRL filings split text across IX tags inside cells)
+    // ═══════════════════════════════════════════════════════════════════
+    if (candidates.length === 0 && valueTerms.length > 0) {
+      console.log('[QD] No text-node matches. Trying cell-level (td) search for XBRL...');
+      var allCells = document.querySelectorAll('td, th');
+      for (var ci = 0; ci < allCells.length && candidates.length < 50; ci++) {
+        var cell = allCells[ci];
+        var cellText = norm(cell.textContent).trim();
+        if (!cellText) continue;
+
+        for (var vj = 0; vj < valueTerms.length; vj++) {
+          var vTerm = valueTerms[vj];
+          if (!vTerm || vTerm.length < 2) continue;
+          var normVTerm = norm(vTerm);
+          // Check both exact and case-insensitive
+          if (cellText.indexOf(normVTerm) !== -1 || cellText.toLowerCase().indexOf(normVTerm.toLowerCase()) !== -1) {
+            var tr = closestTr(cell);
+            var rowLbl = getRowLabel(tr);
+            var lScore = scoreLabelMatch(rowLbl);
+
+            var sc = 0;
+            if (lScore > 0) sc += lScore;
+            sc += 15; // in table
+            sc += Math.max(0, 8 - vj * 2);
+
+            // Use the first text node inside this cell for highlighting
+            var textNode = null;
+            var twCell = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null);
+            var tn;
+            while ((tn = twCell.nextNode())) {
+              if (tn.textContent.trim().length > 0) { textNode = tn; break; }
             }
-          }, 100);
+            if (textNode) {
+              candidates.push({
+                node: textNode, idx: 0, len: textNode.textContent.length,
+                parent: cell, score: sc, labelScore: lScore,
+                rowLabel: rowLbl, isInTable: true, valueTerm: vTerm
+              });
+            }
+            break;
+          }
+          // Also try without commas
+          var noC = normVTerm.replace(/,/g, '');
+          var cellNoC = cellText.replace(/,/g, '');
+          if (noC.length >= 3 && cellNoC.indexOf(noC) !== -1) {
+            var tr2 = closestTr(cell);
+            var rowLbl2 = getRowLabel(tr2);
+            var lScore2 = scoreLabelMatch(rowLbl2);
+            var sc2 = (lScore2 > 0 ? lScore2 : 0) + 15 + Math.max(0, 8 - vj * 2);
+            var textNode2 = null;
+            var twCell2 = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null);
+            var tn2;
+            while ((tn2 = twCell2.nextNode())) {
+              if (tn2.textContent.trim().length > 0) { textNode2 = tn2; break; }
+            }
+            if (textNode2) {
+              candidates.push({
+                node: textNode2, idx: 0, len: textNode2.textContent.length,
+                parent: cell, score: sc2, labelScore: lScore2,
+                rowLabel: rowLbl2, isInTable: true, valueTerm: vTerm
+              });
+            }
+            break;
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        candidates.sort(function(a, b) { return b.score - a.score; });
+        var best2 = candidates[0];
+        console.log('[QD] Cell-level match: score=' + best2.score + ' row="' + best2.rowLabel.slice(0, 60) + '" val="' + best2.valueTerm + '"');
+        var conf2 = best2.labelScore >= 60 ? 'verified' : best2.labelScore >= 30 ? 'likely' : best2.labelScore > 0 ? 'partial' : 'value_only';
+        sendResult(conf2, best2.rowLabel.slice(0, 120), best2.valueTerm);
+        doHighlight(best2);
+        return;
+      }
+    }
 
-          found = true;
-          console.log('[QD] Highlighted term: ' + term);
-          return;
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 4: No value found — try label-only (scroll to section)
+    // ═══════════════════════════════════════════════════════════════════
+    if (labelTerms.length > 0) {
+      console.log('[QD] No value match. Trying label-only.');
+      for (var li = 0; li < labelTerms.length; li++) {
+        var label = labelTerms[li];
+        var tw2 = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        var node2;
+        while ((node2 = tw2.nextNode())) {
+          var p2 = node2.parentElement;
+          if (!p2) continue;
+          var t2 = p2.tagName;
+          if (t2 === 'STYLE' || t2 === 'SCRIPT' || t2 === 'HEAD' || t2 === 'NOSCRIPT') continue;
+          var m2 = findInNode(node2, label);
+          if (m2) {
+            console.log('[QD] Label-only match: "' + label + '"');
+            sendResult('label_only', '', '');
+            doHighlight({ node: node2, idx: m2.idx, len: m2.len, parent: p2 });
+            return;
+          }
         }
       }
     }
-    console.log('[QD] No matching term found in document text');
   }
 
-  // Try multiple times — large documents need time to render
   if (document.readyState === 'complete') {
-    tryHighlight();
+    setTimeout(tryHighlight, 200);
   } else {
-    window.addEventListener('load', function() {
-      setTimeout(tryHighlight, 200);
-    });
+    window.addEventListener('load', function() { setTimeout(tryHighlight, 400); });
   }
-  // Also retry after delays for very large documents
-  setTimeout(tryHighlight, 1500);
-  setTimeout(tryHighlight, 4000);
+  setTimeout(tryHighlight, 2500);
+  setTimeout(tryHighlight, 6000);
+  setTimeout(function() {
+    if (!found) {
+      tryHighlight();
+      if (!found) sendResult('not_found', '', '');
+    }
+  }, 10000);
 })();
 </script>`;
 }
@@ -180,6 +573,10 @@ export const SourceViewer = memo(() => {
   const panelRef = useRef<HTMLDivElement>(null);
   const [panelWidth, setPanelWidth] = useState(520);
   const [verified, setVerified] = useState(false);
+
+  // Match confidence from the iframe finder script
+  const [matchConfidence, setMatchConfidence] = useState<string | null>(null);
+  const [matchRowLabel, setMatchRowLabel] = useState('');
 
   // Which source tab is active (index into allSourceUrls)
   const [activeSourceIdx, setActiveSourceIdx] = useState(0);
@@ -204,8 +601,10 @@ export const SourceViewer = memo(() => {
   // Text to highlight in the document
   const highlightTexts = useMemo(() => {
     const texts: string[] = [];
-    if (provenance?.sourceSnippet) texts.push(provenance.sourceSnippet);
+    // Evidence snippet from StatementMap takes priority — it's the exact row text
     const locCtx = provenance?.location as any;
+    if (locCtx?.evidenceSnippet) texts.push(locCtx.evidenceSnippet);
+    if (provenance?.sourceSnippet) texts.push(provenance.sourceSnippet);
     if (locCtx?.textAnchor) texts.push(locCtx.textAnchor);
     const gs: Array<{ segment: { text: string } }> = (provenance as any)?._groundingSupports || [];
     for (const g of gs) {
@@ -215,8 +614,15 @@ export const SourceViewer = memo(() => {
   }, [provenance]);
 
   // Search terms derived from the cell value (multi-scale number matching)
+  // filing_label takes priority over cellLabel for context-aware search
   const searchTerms = useMemo(
-    () => buildSearchTerms(provenance?.location?.cellValue, provenance?.location?.cellLabel),
+    () =>
+      buildSearchTerms(
+        provenance?.location?.cellValue,
+        provenance?.location?.cellLabel,
+        provenance?.location?.filingLabel,
+        provenance?.location?.evidenceSnippet
+      ),
     [provenance]
   );
 
@@ -225,7 +631,27 @@ export const SourceViewer = memo(() => {
   // Reset verified badge when a different cell is selected
   useEffect(() => {
     setVerified(false);
+    setMatchConfidence(null);
+    setMatchRowLabel('');
   }, [cell]);
+
+  // Listen for match confidence from iframe finder script
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'qd-match-result') {
+        setMatchConfidence(e.data.confidence || null);
+        setMatchRowLabel(e.data.rowLabel || '');
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  // Reset confidence when provenance changes (new document/cell)
+  useEffect(() => {
+    setMatchConfidence(null);
+    setMatchRowLabel('');
+  }, [provenance]);
 
   // Keyboard handler: Enter = confirm (remove yellow dot), Delete/Backspace = override (remove + edit cell)
   useEffect(() => {
@@ -268,9 +694,12 @@ export const SourceViewer = memo(() => {
       let html = rawHtml;
 
       // Inject base tag so relative URLs resolve correctly
+      // Use the directory path (not just origin) so relative refs like "R1.htm" work
       let baseUrl = '';
       try {
-        baseUrl = new URL(finalUrl).origin;
+        const u = new URL(finalUrl);
+        const lastSlash = u.pathname.lastIndexOf('/');
+        baseUrl = u.origin + u.pathname.slice(0, lastSlash + 1);
       } catch {
         /* ignore */
       }
@@ -455,19 +884,97 @@ export const SourceViewer = memo(() => {
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-yellow-700">
                 {activeUrl?.includes('sec.gov') ? '🔍 Locating Value In Filing' : 'Data Located In Document'}
               </div>
+
+              {/* Filing section badge */}
+              {provenance?.location?.filingSection && (
+                <div className="mb-1.5 flex items-center gap-1 text-[10px]">
+                  <span className="rounded bg-blue-100 px-1.5 py-0.5 font-medium text-blue-800">
+                    {'📄 '}
+                    {provenance.location.filingSection}
+                  </span>
+                </div>
+              )}
+
+              {/* Cell label → Filing label mapping */}
               {provenance?.location?.cellValue && (
-                <div className="mb-1 flex items-center gap-2 text-[11px]">
+                <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px]">
                   {provenance.location.cellLabel && (
-                    <span className="font-medium text-yellow-800">{provenance.location.cellLabel}:</span>
+                    <span className="font-medium text-yellow-800">{provenance.location.cellLabel}</span>
+                  )}
+                  {provenance.location.filingLabel &&
+                    provenance.location.cellLabel &&
+                    provenance.location.filingLabel.toLowerCase() !== provenance.location.cellLabel.toLowerCase() && (
+                      <span className="flex items-center gap-1 text-[10px] text-yellow-600">
+                        {'→ '}
+                        <span className="rounded bg-orange-100 px-1 py-0.5 font-medium text-orange-800">
+                          {provenance.location.filingLabel}
+                        </span>
+                      </span>
+                    )}
+                  {(provenance.location.cellLabel || provenance.location.filingLabel) && (
+                    <span className="text-yellow-600">:</span>
                   )}
                   <span className="rounded bg-yellow-200/60 px-1.5 py-0.5 font-mono font-semibold text-yellow-900">
                     {provenance.location.cellValue}
                   </span>
                 </div>
               )}
-              {highlightTexts.length > 0 && highlightTexts[0] !== provenance?.location?.cellValue && (
-                <div className="text-[10px] leading-relaxed text-yellow-800">&ldquo;{highlightTexts[0]}&rdquo;</div>
+
+              {/* Filing note — explains mapping assumption */}
+              {provenance?.location?.filingNote && (
+                <div className="mt-1 rounded bg-orange-50 px-2 py-1 text-[10px] leading-relaxed text-orange-700">
+                  {'💡 '}
+                  {provenance.location.filingNote}
+                </div>
               )}
+
+              {/* Match confidence indicator */}
+              {matchConfidence && (
+                <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
+                  {matchConfidence === 'verified' && (
+                    <span className="rounded bg-green-100 px-1.5 py-0.5 font-medium text-green-800">
+                      {'✅ Verified — value and label match in document'}
+                    </span>
+                  )}
+                  {matchConfidence === 'likely' && (
+                    <span className="rounded bg-blue-50 px-1.5 py-0.5 font-medium text-blue-700">
+                      {'🔵 Likely match — label partially matches'}
+                    </span>
+                  )}
+                  {matchConfidence === 'partial' && (
+                    <span className="rounded bg-yellow-100 px-1.5 py-0.5 font-medium text-yellow-700">
+                      {'🔶 Partial match — check row context'}
+                    </span>
+                  )}
+                  {matchConfidence === 'value_only' && (
+                    <span className="rounded bg-orange-100 px-1.5 py-0.5 font-medium text-orange-700">
+                      {'⚠️ Value found but row label does not match — verify manually'}
+                    </span>
+                  )}
+                  {matchConfidence === 'label_only' && (
+                    <span className="rounded bg-orange-100 px-1.5 py-0.5 font-medium text-orange-700">
+                      {'⚠️ Found section but value not in this row — data may differ from filing'}
+                    </span>
+                  )}
+                  {matchConfidence === 'not_found' && (
+                    <span className="rounded bg-red-100 px-1.5 py-0.5 font-medium text-red-700">
+                      {'❌ Value not found in document — double-check this data'}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Show the matched row label from the document for transparency */}
+              {matchRowLabel &&
+                matchConfidence &&
+                matchConfidence !== 'verified' &&
+                matchConfidence !== 'not_found' && (
+                  <div className="mt-1 text-[9px] text-muted-foreground">
+                    {'Document row: "'}
+                    {matchRowLabel.slice(0, 100)}
+                    {'"'}
+                  </div>
+                )}
             </div>
           )}
 

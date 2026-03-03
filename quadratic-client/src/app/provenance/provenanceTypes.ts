@@ -31,6 +31,18 @@ export interface LocationContext {
   cellValue?: string;
   /** The row label / metric name (e.g. "EBIT", "Revenue") */
   cellLabel?: string;
+  /** The EXACT label as it appears in the source filing (e.g. "Operating income" for EBIT) */
+  filingLabel?: string;
+  /** The section/table in the filing (e.g. "Consolidated Statements of Operations") */
+  filingSection?: string;
+  /** Explanation when the cell label differs from the filing label */
+  filingNote?: string;
+  /** The EXACT row text from the filing table for precise source verification */
+  evidenceSnippet?: string;
+  /** Table identifier from the StatementMap (e.g. "table_1_income_statement") */
+  tableId?: string;
+  /** Period/year column label (e.g. "2024", "2023") */
+  columnLabel?: string;
 }
 
 /** The full Provenance metadata object stored per cell */
@@ -51,6 +63,20 @@ export interface Provenance {
   sourceSnippet?: string;
   /** Optional: URL for web sources */
   sourceUrl?: string;
+
+  // ---- 3-Role Orchestrator fields (AssumptionPack integration) ----
+  /** Classification from the ASSUMPTIONS role: GIVEN / SOURCED / ASSUMED */
+  classification?: 'GIVEN' | 'SOURCED' | 'ASSUMED';
+  /** Rationale for the value (especially for ASSUMED) */
+  rationale?: string;
+  /** Bull-case value (for ASSUMED drivers with scenario ranges) */
+  bullValue?: number | string;
+  /** Bear-case value (for ASSUMED drivers with scenario ranges) */
+  bearValue?: number | string;
+  /** Unit of measurement, e.g. "millions USD", "%" */
+  unit?: string;
+  /** Methodology description from the AssumptionPack */
+  methodology?: string;
 }
 
 /**

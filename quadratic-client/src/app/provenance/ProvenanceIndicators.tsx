@@ -38,6 +38,14 @@ export const ProvenanceIndicators = memo(() => {
     try {
       const sheetId = sheets.current;
       const entries = provenanceStore.getForSheet(sheetId);
+      console.log(
+        '[ProvenanceIndicators] updateCells: sheetId=',
+        sheetId,
+        'entries=',
+        entries.length,
+        'store.size=',
+        provenanceStore.size
+      );
       if (entries.length === 0) {
         setCells([]);
         return;
@@ -74,9 +82,11 @@ export const ProvenanceIndicators = memo(() => {
         });
       }
 
+      console.log('[ProvenanceIndicators] visible cells:', visible.length, 'of', entries.length);
       setCells(visible);
-    } catch {
+    } catch (e) {
       // sheets may not be ready yet
+      console.warn('[ProvenanceIndicators] updateCells error:', e);
     }
   }, []);
 

@@ -5,6 +5,38 @@
  * Only active when VITE_AUTH_TYPE=local.
  */
 
+import path from 'path';
+import { runOrchestrator, shouldUseRolePipeline } from './roleOrchestrator.js';
+import { buildStatementMap, buildMapContextForLLM } from './statementMapper.js';
+
+// Initialize filing HTML cache at module level so it's available to all handlers
+if (!globalThis._filingHtmlCache) globalThis._filingHtmlCache = new Map();
+
+// ---------------------------------------------------------------------------
+// fetchWithRetry — handles slow-network connect timeouts with retry
+// ---------------------------------------------------------------------------
+async function fetchWithRetry(url, options = {}, { retries = 3, baseDelay = 2000, timeout = 60000, label = 'fetch' } = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      const isTimeout = err.name === 'AbortError' || /timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND/i.test(err.message) || (err.cause && /timeout|ETIMEDOUT/i.test(err.cause.message));
+      if (isTimeout && attempt < retries) {
+        const delay = baseDelay * attempt;
+        console.log(`[mock-api] ${label} attempt ${attempt}/${retries} timed out, retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 const MOCK_TEAM_UUID = '00000000-0000-0000-0000-000000000001';
 const MOCK_USER_ID = 1;
 const NOW = new Date().toISOString();
@@ -16,173 +48,142 @@ let GEMINI_API_KEY = '';
 let GEMINI_MODEL = 'gemini-2.0-flash';
 
 // ---------------------------------------------------------------------------
-// Gemini-compatible function declarations for BankSheet AI tools
-// These mirror what quadratic-api builds from aiToolsSpec
+// OpenAI configuration – for PLANNER and ASSUMPTIONS roles
 // ---------------------------------------------------------------------------
-const GEMINI_TOOL_DECLARATIONS = [
-  {
-    name: 'set_cell_values',
-    description:
-      'Sets the values of cells in the current open sheet to a 2d array of strings. Requires sheet_name, top_left_position (in a1 notation like "A1"), and a 2d array of string values. Include column headers as the first row. Do NOT place cells over existing data.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        sheet_name: { type: 'STRING', description: 'The sheet name (e.g. "Sheet1")' },
-        top_left_position: {
-          type: 'STRING',
-          description: 'Top-left cell in A1 notation where data starts (e.g. "A1")',
-        },
-        cell_values: {
-          type: 'ARRAY',
-          items: { type: 'ARRAY', items: { type: 'STRING', description: 'Cell value as string' } },
-          description: '2D array of string values. First row should be headers.',
-        },
-        _provenance: {
-          type: 'OBJECT',
-          description:
-            'Deep-Traceability: source metadata for where this data came from. Always include this when you know the data source.',
-          properties: {
-            file_id: { type: 'STRING', description: 'Unique identifier or path of the source file' },
-            file_name: { type: 'STRING', description: 'Human-readable name of the source' },
-            file_type: { type: 'STRING', description: 'Type: pdf, csv, json, xlsx, url, text, unknown' },
-            source_url: { type: 'STRING', description: 'URL of the web source if applicable' },
-            page_index: { type: 'NUMBER', description: '0-based page index for PDFs' },
-            text_anchor: {
-              type: 'STRING',
-              description: 'A snippet of text near the extracted data for context anchoring',
-            },
-            source_snippet: {
-              type: 'STRING',
-              description: 'The raw text excerpt from the source surrounding the data',
-            },
-            json_path: { type: 'STRING', description: 'JSON path like $.data[0].value if from JSON source' },
-          },
-        },
-      },
-      required: ['sheet_name', 'top_left_position', 'cell_values'],
-    },
-  },
-  {
-    name: 'add_data_table',
-    description:
-      'Adds a new data table to the sheet. Use for clearly tabular data. Requires sheet_name, table_name, top_left_position (in a1 notation), and table_data (2d array where first row is headers).',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        sheet_name: { type: 'STRING', description: 'The sheet name' },
-        table_name: { type: 'STRING', description: 'Name for the data table' },
-        top_left_position: { type: 'STRING', description: 'Top-left cell in A1 notation' },
-        table_data: {
-          type: 'ARRAY',
-          items: { type: 'ARRAY', items: { type: 'STRING' } },
-          description: '2D array. First row = headers, subsequent rows = data.',
-        },
-        _provenance: {
-          type: 'OBJECT',
-          description:
-            'Deep-Traceability: source metadata for where this data came from. Always include this when you know the data source.',
-          properties: {
-            file_id: { type: 'STRING', description: 'Unique identifier or path of the source file' },
-            file_name: { type: 'STRING', description: 'Human-readable name of the source' },
-            file_type: { type: 'STRING', description: 'Type: pdf, csv, json, xlsx, url, text, unknown' },
-            source_url: { type: 'STRING', description: 'URL of the web source if applicable' },
-            page_index: { type: 'NUMBER', description: '0-based page index for PDFs' },
-            text_anchor: {
-              type: 'STRING',
-              description: 'A snippet of text near the extracted data for context anchoring',
-            },
-            source_snippet: {
-              type: 'STRING',
-              description: 'The raw text excerpt from the source surrounding the data',
-            },
-          },
-        },
-      },
-      required: ['sheet_name', 'table_name', 'top_left_position', 'table_data'],
-    },
-  },
-  {
-    name: 'set_code_cell_value',
-    description:
-      'Sets a code cell (Python or JavaScript or Formula) at the given position. The code will be executed. Use for calculations, data fetching, analysis.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        sheet_name: { type: 'STRING', description: 'The sheet name' },
-        code_cell_name: { type: 'STRING', description: 'A descriptive name for the code cell' },
-        code_cell_language: {
-          type: 'STRING',
-          description: 'Language: "Python", "Javascript", or "Formula"',
-        },
-        code_string: { type: 'STRING', description: 'The code to execute' },
-        code_cell_position: { type: 'STRING', description: 'Cell position in A1 notation' },
-      },
-      required: ['sheet_name', 'code_cell_name', 'code_cell_language', 'code_string', 'code_cell_position'],
-    },
-  },
-  {
-    name: 'set_formula_cell_value',
-    description:
-      'Sets one or more formula cells. Use for spreadsheet formulas like =SUM(A1:A10), =AVERAGE(), etc. Provide an array of formulas.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        formulas: {
-          type: 'ARRAY',
-          items: {
-            type: 'OBJECT',
-            properties: {
-              sheet_name: { type: 'STRING', description: 'The sheet name' },
-              code_cell_position: { type: 'STRING', description: 'Cell position in A1 notation' },
-              formula_string: { type: 'STRING', description: 'The formula string (e.g. "=SUM(A1:A10)")' },
-            },
-            required: ['code_cell_position', 'formula_string'],
-          },
-          description: 'Array of formula objects to set',
-        },
-      },
-      required: ['formulas'],
-    },
-  },
-  {
-    name: 'web_search',
-    description:
-      'Search the web for current information. Use this when the user asks about real-world data, current events, stock prices, financial data, etc. that you do not have in your training data.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        query: { type: 'STRING', description: 'The search query' },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'user_prompt_suggestions',
-    description:
-      'After completing a task, suggest 2-3 follow-up prompts the user might want to try next. Only call this after you have completed the main task.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        prompt_suggestions: {
-          type: 'ARRAY',
-          items: {
-            type: 'OBJECT',
-            properties: {
-              label: { type: 'STRING', description: 'Short label for the suggestion' },
-              prompt: { type: 'STRING', description: 'The full prompt text' },
-            },
-            required: ['label', 'prompt'],
-          },
-          description: 'Array of 2-3 suggested follow-up prompts',
-        },
-      },
-      required: ['prompt_suggestions'],
-    },
-  },
-];
+let OPENAI_API_KEY = '';
+let OPENAI_MODEL = 'gpt-4o';
+let PROVIDER_ROUTING = { planner: 'openai', assumptions: 'openai', executor: 'gemini' };
+
+// ---------------------------------------------------------------------------
+// Gemini-compatible function declarations for BankSheet AI tools
+// Dynamically loaded from aiToolsSpec at server startup via ssrLoadModule
+// ---------------------------------------------------------------------------
+let GEMINI_TOOL_DECLARATIONS = [];
 
 // Build the Gemini tools payload
-const GEMINI_TOOLS = [{ functionDeclarations: GEMINI_TOOL_DECLARATIONS }];
+let GEMINI_TOOLS = [];
+
+// QuadraticDocs + PythonDocs + FormulaDocs + A1Docs + ValidationDocs
+let QUADRATIC_CONTEXT_TEXT = '';
+
+// Per-tool prompt instructions from aiToolsSpec
+let TOOL_USE_CONTEXT_TEXT = '';
+
+// Promise that resolves when tools and docs are loaded
+let toolsLoadedPromise = null;
+
+// ---------------------------------------------------------------------------
+// Convert aiToolsSpec JSON Schema parameters → Gemini Schema format
+// (Ported from quadratic-api/src/ai/helpers/genai.helper.ts)
+// ---------------------------------------------------------------------------
+function convertSingleTypeToGemini(type) {
+  const typeMap = { string: 'STRING', number: 'NUMBER', boolean: 'BOOLEAN', null: 'NULL' };
+  return { type: typeMap[type] || 'STRING' };
+}
+
+function convertParametersToGemini(parameter) {
+  if (!parameter) return { type: 'OBJECT', properties: {} };
+  // Handle union types (array of type strings like ['string', 'null'])
+  if (Array.isArray(parameter.type)) {
+    const types = parameter.type;
+    if (types.length === 2 && types.includes('null')) {
+      const nonNullType = types.find((t) => t !== 'null');
+      if (nonNullType) {
+        return { ...convertSingleTypeToGemini(nonNullType), nullable: true, description: parameter.description };
+      }
+    }
+    return { anyOf: types.map((t) => convertSingleTypeToGemini(t)), description: parameter.description };
+  }
+  switch (parameter.type) {
+    case 'object':
+      return {
+        type: 'OBJECT',
+        properties: Object.fromEntries(
+          Object.entries(parameter.properties || {}).map(([key, value]) => [key, convertParametersToGemini(value)])
+        ),
+        required: parameter.required,
+      };
+    case 'array':
+      return { type: 'ARRAY', items: convertParametersToGemini(parameter.items) };
+    case 'string':
+      return { type: 'STRING', description: parameter.description };
+    case 'number':
+      return { type: 'NUMBER', description: parameter.description };
+    case 'boolean':
+      return { type: 'BOOLEAN', description: parameter.description };
+    case 'null':
+      return { type: 'NULL', description: parameter.description };
+    default:
+      return { type: 'STRING', description: parameter.description };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Load tools and documentation from the real shared/api source files
+// Uses Vite's ssrLoadModule for transparent TypeScript support
+// ---------------------------------------------------------------------------
+async function loadToolsAndDocs(server) {
+  const projectRoot = server.config.root; // quadratic-client/
+  const sharedRoot = path.resolve(projectRoot, '../quadratic-shared');
+  const apiRoot = path.resolve(projectRoot, '../quadratic-api');
+
+  // --- Load aiToolsSpec ---
+  try {
+    const specModule = await server.ssrLoadModule(path.resolve(sharedRoot, 'ai/specs/aiToolsSpec.ts'));
+    const { aiToolsSpec } = specModule;
+
+    // Filter to AIAnalyst tools compatible with 'fast' mode (Gemini Flash)
+    const aiModelMode = 'fast';
+    const toolEntries = Object.entries(aiToolsSpec).filter(
+      ([_, spec]) => spec.sources?.includes('AIAnalyst') && spec.aiModelModes?.includes(aiModelMode)
+    );
+
+    GEMINI_TOOL_DECLARATIONS = toolEntries.map(([name, spec]) => ({
+      name,
+      description: spec.description,
+      parameters: convertParametersToGemini(spec.parameters),
+    }));
+    GEMINI_TOOLS = [{ functionDeclarations: GEMINI_TOOL_DECLARATIONS }];
+    console.log(`[mock-api] ✓ Loaded ${GEMINI_TOOL_DECLARATIONS.length} tools from aiToolsSpec`);
+
+    // Build ToolUseContext (per-tool prompts)
+    TOOL_USE_CONTEXT_TEXT = toolEntries
+      .filter(([_, spec]) => spec.prompt)
+      .map(([name, spec]) => `#${name}\n${spec.prompt}`)
+      .join('\n\n');
+    console.log(
+      `[mock-api] ✓ Built ToolUseContext (${TOOL_USE_CONTEXT_TEXT.length} chars, ${toolEntries.filter(([_, s]) => s.prompt).length} tool prompts)`
+    );
+  } catch (e) {
+    console.error('[mock-api] ✗ Could not load aiToolsSpec:', e.message);
+    console.error('[mock-api]   AI tool calling will not work!');
+  }
+
+  // --- Load documentation files ---
+  try {
+    const docsDir = path.resolve(apiRoot, 'src/ai/docs');
+    const [quadDocs, pyDocs, fDocs, a1Docs, vDocs] = await Promise.all([
+      server.ssrLoadModule(path.resolve(docsDir, 'QuadraticDocs.ts')),
+      server.ssrLoadModule(path.resolve(docsDir, 'PythonDocs.ts')),
+      server.ssrLoadModule(path.resolve(docsDir, 'FormulaDocs.ts')),
+      server.ssrLoadModule(path.resolve(docsDir, 'A1Docs.ts')),
+      server.ssrLoadModule(path.resolve(docsDir, 'ValidationDocs.ts')),
+    ]);
+
+    QUADRATIC_CONTEXT_TEXT = [
+      quadDocs.QuadraticDocs || '',
+      pyDocs.PythonDocs || '',
+      fDocs.FormulaDocs || '',
+      a1Docs.A1Docs || '',
+      vDocs.ValidationDocs || '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    console.log(`[mock-api] ✓ Loaded documentation (${QUADRATIC_CONTEXT_TEXT.length} chars)`);
+  } catch (e) {
+    console.error('[mock-api] ✗ Could not load documentation:', e.message);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // In-memory file store
@@ -372,10 +373,22 @@ export function mockApiPlugin(apiUrl, env = {}) {
   // Hydrate Gemini config from Vite's loadEnv (includes .env.local values)
   GEMINI_API_KEY = env.VITE_GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
   GEMINI_MODEL = env.VITE_GEMINI_MODEL || process.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash';
+  OPENAI_API_KEY = env.VITE_OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY || '';
+  OPENAI_MODEL = env.VITE_OPENAI_MODEL || process.env.VITE_OPENAI_MODEL || 'gpt-4o';
+  PROVIDER_ROUTING = {
+    planner: env.VITE_PLANNER_PROVIDER || 'openai',
+    assumptions: env.VITE_ASSUMPTIONS_PROVIDER || 'openai',
+    executor: env.VITE_EXECUTOR_PROVIDER || 'gemini',
+  };
   console.log('[mock-api] Gemini API key loaded:', GEMINI_API_KEY ? 'YES (ends ...' + GEMINI_API_KEY.slice(-4) + ')' : 'MISSING');
+  console.log('[mock-api] OpenAI API key loaded:', OPENAI_API_KEY ? 'YES (ends ...' + OPENAI_API_KEY.slice(-4) + ')' : 'MISSING');
+  console.log('[mock-api] Provider routing:', JSON.stringify(PROVIDER_ROUTING));
   return {
     name: 'mock-api',
     configureServer(server) {
+      // Start loading tools + docs from the real shared/api source files
+      toolsLoadedPromise = loadToolsAndDocs(server);
+
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith('/mock-api/')) {
           return next();
@@ -426,10 +439,18 @@ export function mockApiPlugin(apiUrl, env = {}) {
             }
           }
 
+          // Check if we already have this filing's HTML cached from the SEC pre-fetch.
+          // This avoids re-fetching from SEC EDGAR (which can 404 due to rate limits,
+          // URL changes, or network issues). The middleware already fetched and cached
+          // the HTML when building the StatementMap.
+          if (globalThis._filingHtmlCache && globalThis._filingHtmlCache.has(url)) {
+            console.log('[mock-api] fetch-url: serving cached filing HTML for', url.slice(0, 80));
+            return send(res, { html: globalThis._filingHtmlCache.get(url), resolvedUrl: url });
+          }
+
           try {
-            // Use global fetch (Node 18+). Add a 15s timeout for safety.
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
+            const timeout = setTimeout(() => controller.abort(), 30000);
             // SEC EDGAR requires an identifying User-Agent; other sites need browser-like UA
             const isSEC = url.includes('sec.gov');
             const ua = isSEC
@@ -666,136 +687,96 @@ export function mockApiPlugin(apiUrl, env = {}) {
           const { messages, modelKey, useStream, useToolsPrompt, source, toolName } = body;
           const isWebSearch = source === 'WebSearch' || toolName === 'web_search_internal';
 
+          // ---- Extract original user query text (for source resolution) ----
+          // IMPORTANT: We extract this BEFORE building Gemini contents because
+          // in multi-turn conversations the last user message in fixedContents
+          // may contain only functionResponse parts (tool results) with no .text.
+          // We only want the ACTUAL user-typed prompt text, not internal context
+          // messages (which have contextType like 'fileSummary', 'visibleData', etc.)
+          // The user-typed prompt has contextType === 'userPrompt'.
+          const originalUserQuery = (messages || [])
+            .filter(
+              (m) =>
+                m.role === 'user' &&
+                m.contextType === 'userPrompt'
+            )
+            .flatMap((m) =>
+              (m.content || []).filter((c) => c.type === 'text' && c.text?.trim()).map((c) => c.text.trim())
+            )
+            .filter((t) => !t.startsWith('Note: This is an internal message'))
+            .join(' ')
+            .trim();
+          if (originalUserQuery) {
+            console.log('[mock-api] Original user query for source resolution:', originalUserQuery.slice(0, 120));
+          }
+
           // ---- Build Gemini contents from BankSheet messages ----
           const geminiContents = [];
           const systemParts = [];
 
-          // Deep-Traceability: inject provenance instruction
+          // Wait for tools/docs to finish loading before proceeding
+          if (toolsLoadedPromise) {
+            await toolsLoadedPromise;
+          }
+
+          // ---- Inject QuadraticDocs system context ----
+          // (Matches real API's getQuadraticContext + getToolUseContext)
           systemParts.push({
-            text: `IMPORTANT — Deep-Traceability & Calculation Transparency Protocol:
-
-You are a spreadsheet analyst. Your job is to take financial questions and turn them into clean, auditable spreadsheet cells.
-
-═══════════════════════════════════════════════════════════════
-UNIVERSAL PATTERN FOR ANY FINANCIAL METRIC / RATIO
-═══════════════════════════════════════════════════════════════
-
-Every financial question follows this EXACT pattern — no exceptions:
-
-STEP 1: Identify the FORMULA for the requested metric.
-  - Interest Coverage Ratio = EBIT / Interest Expense
-  - Debt to Equity Ratio   = Total Liabilities / Total Stockholders' Equity
-  - Current Ratio           = Current Assets / Current Liabilities
-  - Profit Margin           = Net Income / Total Revenue
-  - ROE                     = Net Income / Total Stockholders' Equity
-  - ROA                     = Net Income / Total Assets
-  (If you don't know the formula, reason it out from financial first principles.)
-
-STEP 2: Identify the BASE DATA needed (the components of the formula).
-  - Each component is a RAW NUMBER that comes directly from a source document.
-  - NEVER compute or derive a base component. If the filing says "Total Stockholders' Equity: $69,428" then use 69428000000 directly.
-  - If the SEC filing context is provided, SCAN IT for exact numbers. The numbers ARE there.
-
-STEP 3: Place data in cells using this EXACT layout:
-
-  Row 1 = HEADER ROW:
-    A1="Metric"  B1="Value"  C1="Source"
-
-  Row 2..N = BASE DATA ROWS (one per component):
-    A2="[Component Name]"  B2=[raw number from source]  C2="[Company] [Year] 10-K Filing"
-    A3="[Component Name]"  B3=[raw number from source]  C3="[Company] [Year] 10-K Filing"
-
-  Row N+1 = RESULT ROW (formula only):
-    A4="[Metric Name]"  B4=FORMULA  C4="Calculated (=[formula])"
-
-  USE set_cell_values for rows 1 through N (headers + raw data).
-  USE set_formula_cell_value for row N+1 (the computed result).
-
-STEP 4: The formula cell (B4 in the example) MUST use set_formula_cell_value.
-  - NEVER put a pre-computed number where a formula should go.
-  - The formula references the cells above, e.g. "=B2/B3", "=B2-B3", "=B2+B3".
-
-═══════════════════════════════════════════════════════════════
-CONCRETE EXAMPLES
-═══════════════════════════════════════════════════════════════
-
-EXAMPLE 1 — "2024 Tesla Interest Coverage Ratio" (EBIT / Interest Expense):
-  set_cell_values at A1:
-    [["Metric","Value","Source"],
-     ["EBIT",7076000000,"Tesla 2024 10-K Filing"],
-     ["Interest Expense",350000000,"Tesla 2024 10-K Filing"]]
-  set_formula_cell_value:
-    [{code_cell_position:"B4", formula_string:"=B2/B3"}]
-  set_cell_values at A4:
-    [["Interest Coverage Ratio","","Calculated (=B2/B3)"]]
-  → B4 displays 20.22 (formula result)
-
-EXAMPLE 2 — "2024 Apple Debt to Equity Ratio" (Total Liabilities / Total Stockholders' Equity):
-  set_cell_values at A1:
-    [["Metric","Value","Source"],
-     ["Total Liabilities",308030000000,"Apple 2024 10-K Filing"],
-     ["Total Stockholders' Equity",56950000000,"Apple 2024 10-K Filing"]]
-  set_formula_cell_value:
-    [{code_cell_position:"B4", formula_string:"=B2/B3"}]
-  set_cell_values at A4:
-    [["Debt to Equity Ratio","","Calculated (=B2/B3)"]]
-  → B4 displays 5.41 (formula result)
-
-EXAMPLE 3 — "2024 Amazon Current Ratio" (Current Assets / Current Liabilities):
-  set_cell_values at A1:
-    [["Metric","Value","Source"],
-     ["Current Assets",167644000000,"Amazon 2024 10-K Filing"],
-     ["Current Liabilities",179431000000,"Amazon 2024 10-K Filing"]]
-  set_formula_cell_value:
-    [{code_cell_position:"B4", formula_string:"=B2/B3"}]
-  set_cell_values at A4:
-    [["Current Ratio","","Calculated (=B2/B3)"]]
-  → B4 displays 0.93 (formula result)
-
-═══════════════════════════════════════════════════════════════
-ABSOLUTE RULES
-═══════════════════════════════════════════════════════════════
-
-RULE 1 — PATTERN IS ALWAYS THE SAME:
-  Header row → Base data rows (raw numbers) → Formula row.
-  This pattern works for EVERY financial metric. No exceptions.
-
-RULE 2 — NEVER COMPUTE BASE DATA:
-  If the source says "Total Stockholders' Equity: 56,950" then B3=56950000000.
-  Do NOT divide, subtract, multiply, or derive base data from other numbers.
-  Base data = numbers that appear DIRECTLY in the source document.
-
-RULE 3 — NEVER ASK THE USER FOR DATA:
-  If SEC filing context is provided, the numbers are IN the context — extract them.
-  If not provided, call web_search to find them.
-  If web_search fails, use your best knowledge and mark with "Estimated".
-  NEVER respond with "Can you provide..." for publicly available financial data.
-
-RULE 4 — PROVENANCE:
-  Every set_cell_values call MUST include _provenance:
-    source_url: the SEC filing URL (https://www.sec.gov/Archives/edgar/...)
-    file_name: e.g. "Apple 2024 10-K Annual Report"
-    file_type: "url"
-
-RULE 5 — SOURCE ATTRIBUTION:
-  Column C source: "[Company] [Year] 10-K Filing" for raw data.
-  Column C source: "Calculated (=[formula])" for formula rows.
-  NEVER use third-party sites (Macrotrends, Yahoo Finance, etc.)
-
-RULE 6 — FORMULA CELLS MUST USE set_formula_cell_value:
-  The result row's B cell = set_formula_cell_value with formula_string.
-  Example: formula_string:"=B2/B3" — this makes the cell compute live.
-  NEVER put a hardcoded number in the result cell.
-
-RULE 7 — DATA EXTRACTION FROM SEC CONTEXT:
-  When [SEC FILING CONTEXT] is injected into the conversation:
-  - Read all excerpts carefully
-  - Find the EXACT line items matching your base data components
-  - Use those exact numbers (convert to full number: "56,950" in millions = 56950000000)
-  - If the filing uses "in millions", multiply by 1,000,000
-  - If the filing uses "in thousands", multiply by 1,000
-`,
+            text: `Note: This is an internal message for context. Do not quote it in your response.\n\n` +
+              `You are a helpful assistant inside of a spreadsheet application called BankSheet.\n` +
+              `Keep text responses concise - prefer one sentence and bullet points, use more sentences when necessary for clarity (e.g., explaining errors or complex data transformations). Do not add text comments between tool calls unless necessary; only provide a brief summary after all tools have completed. No fluff or filler language.\n` +
+              `You are an agent - please keep going until the user's query is completely resolved, before ending your turn and yielding back to the user. Only terminate your turn when you are sure that the problem is solved.\n` +
+              `If you are not sure about sheet data content pertaining to the user's request, use your tools to read data and gather the relevant information: do NOT guess or make up an answer.\n` +
+              `Be proactive. When the user makes a request, use your tools to solve it.\n\n` +
+              `# Reasoning Strategy\n` +
+              `1. Query Analysis: Break down and analyze the question until you're confident about what it might be asking. Consider the provided context to help clarify any ambiguous or confusing information.\n` +
+              `2. Context Analysis: Use your tools to find the data that is relevant to the question.\n` +
+              `3. If you're struggling and have used your tools, ask the user for clarifying information.\n\n` +
+              `This is the documentation for the spreadsheet application:\n\n` +
+              (QUADRATIC_CONTEXT_TEXT || '') + `\n\n` +
+              `Choose the language of your response based on the context and user prompt.\n` +
+              `Provide complete code blocks with language syntax highlighting. Don't provide small code snippets of changes.\n\n` +
+              `# FINANCIAL DATA RULES (CRITICAL)\n` +
+              `When the user asks for ANY financial ratio, metric, or analysis for a public company:\n` +
+              `1. NEVER just look up a pre-computed ratio from the web. Instead, extract the RAW COMPONENT DATA (e.g., Total Debt, Total Equity, Revenue, Net Income) from official SEC EDGAR 10-K filings.\n` +
+              `2. Put the raw components into an Inputs section with clear labels.\n` +
+              `3. CALCULATE the ratio/metric in the sheet using FORMULAS (e.g., =B3/B4 for Debt-to-Equity), not hardcoded values.\n` +
+              `4. The Source column for every data cell must show the filing URL (e.g., sec.gov/Archives/...), NOT "Web Search".\n` +
+              `5. Only fall back to web search if the data CANNOT be found in SEC filings (e.g., private companies, very recent quarters not yet filed).\n` +
+              `6. For ratio analysis, ALWAYS decompose into components: Debt-to-Equity → needs Total Debt + Total Stockholders Equity; Current Ratio → needs Current Assets + Current Liabilities; etc.\n` +
+              `7. After writing data, VERIFY each sourced number by cross-checking it against the source document text. If the SEC EDGAR context includes extracted financial items, use those exact numbers.\n` +
+              `8. Every cell containing original financial data MUST include a valid source reference (sourceUrl) pointing to the actual filing document.\n` +
+              `\n# FORMATTING & UNITS (CRITICAL)\n` +
+              `9. ONLY format cells as PERCENTAGE (%) when the value is a rate, ratio, or growth rate (e.g., Revenue Growth = 19.9%, Debt-to-Equity = 0.18).\n` +
+              `10. NEVER format Revenue, Net Income, Total Assets, Total Debt, EBIT, Interest Expense, or ANY monetary/dollar value as percentage. Use number or currency format.\n` +
+              `11. When calling formatCells, ALWAYS separate dollar-amount cells from ratio/growth cells into DIFFERENT formatCells calls. Example: formatCells for Revenue cells → "#,##0", separate formatCells for Growth Rate cells → "0.00%".\n` +
+              `12. Before applying percentage format, CHECK the cell value — if it's in billions (like 97.69) or millions (like 307,394), it's a DOLLAR amount, NOT a percentage.\n` +
+              `\n# EXPLICIT UNITS IN SHEET (CRITICAL)\n` +
+              `16. ALWAYS show units explicitly in the sheet. Either: (a) add a dedicated "Units" row right after headers (e.g., Row 2: Units | $ millions | $ millions | ...) OR (b) include units in column headers (e.g., "2023 ($M)", "2024 ($M)").\n` +
+              `17. All monetary values in the same table MUST be in the SAME unit (all millions, or all billions). NEVER mix units. The unit label must match the actual numbers.\n` +
+              `18. If a 10-K reports in millions (e.g., Revenue = 307,394), write 307394 and label the column "$ millions". Do NOT silently convert units without changing the label.\n` +
+              `\n# FORMULA EXECUTION (CRITICAL)\n` +
+              `19. ALWAYS write data cells first (set_cell_values), THEN write formulas (set_formula_cell_value) as a SEPARATE tool call.\n` +
+              `20. NEVER embed formulas (strings starting with =) inside set_cell_values. Formulas MUST use set_formula_cell_value.\n` +
+              `21. When writing formulas, carefully count the row numbers to ensure cell references are correct. Example: if EBIT is in row 3 and Interest Expense is in row 4, Interest Coverage = =B3/B4.\n` +
+              `22. After writing formulas, verify results with get_cell_values. If any cell shows #REF, #VALUE, or #NAME error, fix the formula.\n` +
+              `\n# MULTI-YEAR DATA FROM 10-K FILINGS (CRITICAL)\n` +
+              `13. A single 10-K filing contains COMPARATIVE financial data for the current year AND prior year(s). When the user asks for multi-year data, extract ALL years from the SAME 10-K filing.\n` +
+              `14. The Source column MUST show "SEC 10-K" for EVERY year's original data — NEVER fall back to "Web Search" for prior years when the 10-K has comparative tables.\n` +
+              `15. If a specific value cannot be found in the 10-K filing, explicitly state "Not in 10-K" in the Source column and provide the actual source used.\n`,
           });
+
+          // ---- Inject ToolUseContext (per-tool prompts) ----
+          if (TOOL_USE_CONTEXT_TEXT && useToolsPrompt !== false) {
+            systemParts.push({
+              text: `Note: This is an internal message for context. Do not quote it in your response.\n\n` +
+                `Following are the tools you should use to do actions in the spreadsheet, use them to respond to the user prompt.\n\n` +
+                `Never guess the answer itself and never make up information to attempt to answer a user's question.\n\n` +
+                `Don't include tool details in your response. Reply in layman's terms what actions you are taking.\n\n` +
+                `Use multiple tools in a single response if required, use same tool multiple times in a single response if required. Try to reduce tool call iterations.\n\n` +
+                TOOL_USE_CONTEXT_TEXT,
+            });
+          }
 
           for (const msg of messages) {
             // System messages → system instruction
@@ -907,258 +888,157 @@ RULE 7 — DATA EXTRACTION FROM SEC CONTEXT:
           const SEC_UA = 'BankSheet/1.0 research@example.com'; // SEC requires identifying UA
           const secEdgarCache = new Map();
 
+          // Known CIK cache — declared here BEFORE the pre-fetch block so
+          // extractCompanyFromQuery() can iterate it without hitting TDZ/undefined.
+          const KNOWN_CIKS = new Map([
+            ['apple', { company: 'Apple Inc.', ticker: 'AAPL', cik: '0000320193' }],
+            ['tesla', { company: 'Tesla, Inc.', ticker: 'TSLA', cik: '0001318605' }],
+            ['google', { company: 'Alphabet Inc.', ticker: 'GOOGL', cik: '0001652044' }],
+            ['alphabet', { company: 'Alphabet Inc.', ticker: 'GOOGL', cik: '0001652044' }],
+            ['microsoft', { company: 'Microsoft Corporation', ticker: 'MSFT', cik: '0000789019' }],
+            ['amazon', { company: 'Amazon.com, Inc.', ticker: 'AMZN', cik: '0001018724' }],
+            ['meta', { company: 'Meta Platforms, Inc.', ticker: 'META', cik: '0001326801' }],
+            ['facebook', { company: 'Meta Platforms, Inc.', ticker: 'META', cik: '0001326801' }],
+            ['nvidia', { company: 'NVIDIA Corporation', ticker: 'NVDA', cik: '0001045810' }],
+            ['netflix', { company: 'Netflix, Inc.', ticker: 'NFLX', cik: '0001065280' }],
+            ['jpmorgan', { company: 'JPMorgan Chase & Co.', ticker: 'JPM', cik: '0000019617' }],
+            ['coca-cola', { company: 'The Coca-Cola Company', ticker: 'KO', cik: '0000021344' }],
+            ['cocacola', { company: 'The Coca-Cola Company', ticker: 'KO', cik: '0000021344' }],
+            ['coke', { company: 'The Coca-Cola Company', ticker: 'KO', cik: '0000021344' }],
+            ['pepsi', { company: 'PepsiCo, Inc.', ticker: 'PEP', cik: '0000077476' }],
+            ['pepsico', { company: 'PepsiCo, Inc.', ticker: 'PEP', cik: '0000077476' }],
+            ['walmart', { company: 'Walmart Inc.', ticker: 'WMT', cik: '0000104169' }],
+            ['disney', { company: 'The Walt Disney Company', ticker: 'DIS', cik: '0001744489' }],
+            ['boeing', { company: 'The Boeing Company', ticker: 'BA', cik: '0000012927' }],
+            ['berkshire', { company: 'Berkshire Hathaway Inc.', ticker: 'BRK-B', cik: '0001067983' }],
+            ['goldman', { company: 'The Goldman Sachs Group, Inc.', ticker: 'GS', cik: '0000886982' }],
+          ]);
+          const dynamicCikCache = new Map();
+
+          // ---- Detect internal tool-calling messages ----
+          // The client sends separate /v0/ai/chat requests for internal tools like
+          // set_chat_name, user_prompt_suggestions, set_file_name, categorized_empty_chat_prompt_suggestions.
+          // These do NOT need SEC pre-fetch or source resolution — skip them to avoid
+          // wasteful API calls and connection errors.
+          const INTERNAL_TOOL_RE = /^(?:Use\s+(?:set_chat_name|user_prompt_suggestions|set_file_name|categorized_empty_chat_prompt_suggestions)\s+tool|Based on the spreadsheet data above,\s*call)/i;
+          const isInternalToolCall = INTERNAL_TOOL_RE.test(originalUserQuery);
+
+          // ---- Filing HTML cache (avoids re-fetching the same filing on each request) ----
+          // Static cache that persists across requests within the same server lifetime
+          if (!globalThis._filingHtmlCache) globalThis._filingHtmlCache = new Map();
+          const filingHtmlCache = globalThis._filingHtmlCache;
+
+          // ---- Global caches to prevent redundant SEC operations across tool-call iterations ----
+          // resolveAllCompanyFilings results, keyed by normalized query text
+          if (!globalThis._allFilingsCache) globalThis._allFilingsCache = new Map();
+          // Set of normalized queries that already had SEC context injected into the prompt
+          if (!globalThis._secContextInjectedFor) globalThis._secContextInjectedFor = new Set();
+          // Set of normalized queries that already had post-stream source resolution done
+          if (!globalThis._sourceResolutionDoneFor) globalThis._sourceResolutionDoneFor = new Set();
+
+          const normalizedQuery = originalUserQuery.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+
+          // Detect tool-call continuation: if the conversation already contains
+          // toolResult messages, this is NOT the first iteration — skip heavy work
+          const isToolCallContinuation = (messages || []).some(
+            (m) => m.contextType === 'toolResult'
+          );
+          if (isToolCallContinuation) {
+            console.log('[mock-api] Tool-call continuation detected — will skip SEC pre-fetch and re-injection');
+          }
+
           // ---- Pre-fetch SEC filing context ----
           // Detect financial queries and inject 10-K data into the prompt
+          // ONLY on the FIRST iteration — continuation requests re-use cached context
           let prefetchedSecContext = null;
-          if (!isWebSearch && useToolsPrompt !== false) {
-            const lastUserMsg = fixedContents.filter((m) => m.role === 'user').pop();
-            const userQuery = lastUserMsg?.parts?.map((p) => p.text).join(' ') || '';
+          if (!isWebSearch && useToolsPrompt !== false && !isInternalToolCall && !isToolCallContinuation && !globalThis._secContextInjectedFor.has(normalizedQuery)) {
+            const userQuery = originalUserQuery;
             // Check if this looks like a financial data query
             const financialKeywords =
               /\b(revenue|income|ebit|interest|expense|profit|loss|margin|ratio|coverage|debt|equity|assets|liabilities|earnings|cash flow|operating|net income|gross profit|fiscal|annual|10-k|10k|filing)\b/i;
             if (financialKeywords.test(userQuery)) {
               try {
-                const secFiling = await resolveAnnualReportUrl(userQuery);
+                // Resolve ALL companies mentioned in the query
+                const allFilings = await resolveAllCompanyFilings(userQuery);
+                const secFiling = allFilings[0]; // primary filing for context injection
                 if (secFiling) {
-                  console.log('[mock-api] Pre-fetching SEC filing for context:', secFiling.url.slice(0, 80));
-                  // Fetch the filing HTML and extract key financial snippets
-                  const filingRes = await fetch(secFiling.url, {
-                    headers: { 'User-Agent': SEC_UA },
-                    signal: AbortSignal.timeout(12000),
-                  });
-                  if (filingRes.ok) {
-                    const filingHtml = await filingRes.text();
-                    // Extract text content (strip HTML tags), limit to manageable size
-                    const textContent = filingHtml
-                      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                      .replace(/<[^>]+>/g, ' ')
-                      .replace(/&nbsp;/g, ' ')
-                      .replace(/&amp;/g, '&')
-                      .replace(/&lt;/g, '<')
-                      .replace(/&gt;/g, '>')
-                      .replace(/\s+/g, ' ')
-                      .trim();
+                  console.log('[mock-api] Pre-fetching SEC filing for context:', secFiling.url.slice(0, 80),
+                    '(total companies:', allFilings.length, ')');
+                  // Fetch the filing HTML and extract key financial snippets (with cache)
+                  let filingHtml = filingHtmlCache.get(secFiling.url);
+                  if (!filingHtml) {
+                    const filingRes = await fetch(secFiling.url, {
+                      headers: { 'User-Agent': SEC_UA },
+                      signal: AbortSignal.timeout(30000),
+                    });
+                    if (filingRes.ok) {
+                      filingHtml = await filingRes.text();
+                      filingHtmlCache.set(secFiling.url, filingHtml);
+                    }
+                  }
+                  if (filingHtml) {
+                    // ---- STATEMENT MAP EXTRACTION (v2) ----
+                    // Use structural HTML table parsing instead of regex to extract
+                    // financial data with full table/row/column context.
+                    const statementMap = buildStatementMap(filingHtml);
 
-                    // ---- STRUCTURED EXTRACTION ----
-                    // Instead of raw text blobs, try to extract specific financial line items
-                    // with their values so Gemini can easily find the right numbers.
-                    const extractFinancialLineItems = (text) => {
-                      const items = {};
-                      // Patterns to match common financial line items with dollar values
-                      // Matches patterns like: "Total liabilities  $  308,030" or "Total liabilities 308,030"
-                      const lineItemPatterns = [
-                        {
-                          key: 'total_revenue',
-                          patterns: [
-                            /total\s+(?:net\s+)?(?:revenue|sales)[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                            /(?:net\s+)?(?:revenue|sales)\s+[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                          ],
-                        },
-                        {
-                          key: 'operating_income',
-                          patterns: [
-                            /(?:operating\s+income|income\s+from\s+operations)[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                          ],
-                        },
-                        {
-                          key: 'interest_expense',
-                          patterns: [/interest\s+expense[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'net_income',
-                          patterns: [/net\s+income[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'total_assets',
-                          patterns: [/total\s+assets[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'total_liabilities',
-                          patterns: [/total\s+liabilities[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'total_stockholders_equity',
-                          patterns: [
-                            /total\s+stockholders[\u2019']?\s*equity[^$\d]*[\$]?\s*\(?\s*([\d,]+(?:\.\d+)?)/i,
-                            /total\s+shareholders[\u2019']?\s*equity[^$\d]*[\$]?\s*\(?\s*([\d,]+(?:\.\d+)?)/i,
-                            /total\s+equity[^$\d]*[\$]?\s*\(?\s*([\d,]+(?:\.\d+)?)/i,
-                          ],
-                        },
-                        {
-                          key: 'current_assets',
-                          patterns: [/total\s+current\s+assets[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'current_liabilities',
-                          patterns: [/total\s+current\s+liabilities[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'gross_profit',
-                          patterns: [/gross\s+(?:profit|margin)[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i],
-                        },
-                        {
-                          key: 'total_debt',
-                          patterns: [
-                            /total\s+(?:long-term\s+)?debt[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                            /long-term\s+debt[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                          ],
-                        },
-                        {
-                          key: 'ebit',
-                          patterns: [
-                            /earnings\s+before\s+interest\s+and\s+taxes?[^$\d]*[\$]?\s*([\d,]+(?:\.\d+)?)/i,
-                            /\bEBIT\b[^$\dA-Z]*[\$]?\s*([\d,]+(?:\.\d+)?)/,
-                          ],
-                        },
-                      ];
+                    if (statementMap.tables.length > 0) {
+                      // Cache the statement map for potential use by orchestrator
+                      if (!globalThis._statementMapCache) globalThis._statementMapCache = new Map();
+                      globalThis._statementMapCache.set(secFiling.url, statementMap);
 
-                      for (const item of lineItemPatterns) {
-                        for (const pattern of item.patterns) {
-                          const match = text.match(pattern);
-                          if (match) {
-                            items[item.key] = match[1].replace(/,/g, '');
-                            break;
-                          }
-                        }
-                      }
-
-                      // Detect scale (millions, thousands, etc.)
-                      let scale = 1;
-                      if (/in\s+millions/i.test(text.slice(0, 5000))) {
-                        scale = 1000000;
-                      } else if (/in\s+thousands/i.test(text.slice(0, 5000))) {
-                        scale = 1000;
-                      } else if (/in\s+billions/i.test(text.slice(0, 5000))) {
-                        scale = 1000000000;
-                      }
-
-                      return { items, scale };
-                    };
-
-                    const { items: financialItems, scale } = extractFinancialLineItems(textContent);
-
-                    // Also extract a few raw snippets as fallback context
-                    const extractSnippets = (text, terms, contextChars = 400) => {
-                      const snippets = [];
-                      for (const term of terms) {
-                        const re = new RegExp(term, 'gi');
-                        let match;
-                        while ((match = re.exec(text)) !== null && snippets.length < 8) {
-                          const start = Math.max(0, match.index - contextChars);
-                          const end = Math.min(text.length, match.index + contextChars);
-                          const snippet = text.slice(start, end).trim();
-                          if (!snippets.some((s) => s.includes(snippet.slice(50, 150)))) {
-                            snippets.push(snippet);
-                          }
-                        }
-                      }
-                      return snippets;
-                    };
-
-                    const keyTerms = [
-                      'total stockholders',
-                      'total shareholders',
-                      'total equity',
-                      'total liabilities',
-                      'total assets',
-                      'operating income',
-                      'income from operations',
-                      'interest expense',
-                      'total revenue',
-                      'net income',
-                      'current assets',
-                      'current liabilities',
-                    ];
-                    const snippets = extractSnippets(textContent, keyTerms);
-
-                    const hasStructuredData = Object.keys(financialItems).length > 0;
-                    const hasSnippets = snippets.length > 0;
-
-                    if (hasStructuredData || hasSnippets) {
                       prefetchedSecContext = {
                         filing: secFiling,
-                        snippets,
-                        financialItems,
-                        scale,
+                        statementMap,
                       };
 
-                      const scaleLabel =
-                        scale === 1000000
-                          ? 'in millions'
-                          : scale === 1000
-                            ? 'in thousands'
-                            : scale === 1000000000
-                              ? 'in billions'
-                              : 'in actual dollars';
+                      // Build rich context text from the structural map
+                      const contextText = buildMapContextForLLM(
+                        statementMap,
+                        secFiling.url,
+                        secFiling.company,
+                        secFiling.ticker,
+                        secFiling.fiscalYear
+                      );
 
-                      // Build structured context
-                      const contextLines = [
-                        `[SEC FILING CONTEXT — ${secFiling.title}]`,
-                        `Source URL: ${secFiling.url}`,
-                        `Company: ${secFiling.company} (${secFiling.ticker})`,
-                        `Fiscal Year: ${secFiling.fiscalYear}`,
-                        `Numbers are reported ${scaleLabel}.`,
+                      // Append critical instructions
+                      const instructions = [
                         '',
-                      ];
+                        '=== CRITICAL: UNITS & FORMATTING ===',
+                        'These are DOLLAR amounts — write them as plain numbers. Format as NUMBER, NOT PERCENTAGE.',
+                        'Only format cells as percentage when the value is a RATE or GROWTH — Revenue, Income, Assets, Debt are NEVER percentages.',
+                        '',
+                        '=== MULTI-YEAR COMPARATIVE DATA ===',
+                        `This ${secFiling.fiscalYear} 10-K filing contains COMPARATIVE financial data for prior year(s) (typically ${secFiling.fiscalYear - 1} and/or ${secFiling.fiscalYear - 2}).`,
+                        'For multi-year queries: extract ALL years\' data from THIS filing. Do NOT use web search for prior years.',
+                        'The prior year values appear in the same financial statements as the current year — they are in adjacent columns of the same tables.',
+                        `Source ALL years' data as "SEC 10-K" with this filing URL: ${secFiling.url}`,
+                        '',
+                        `Source document: ${secFiling.url}`,
+                        'IMPORTANT: Do NOT include this URL or the raw filing numbers in your text response. Use the data silently to fill cells.',
+                        'IMPORTANT: Revenue and dollar amounts must use NUMBER format, NEVER percentage format. Only growth rates and ratios use percentage format.',
+                        'IMPORTANT: For multi-year data, ALL years must be sourced from this 10-K filing. NEVER use "Web Search" as source for any year.',
+                        '',
+                        '=== EVIDENCE SNIPPET REQUIREMENT ===',
+                        'For each SOURCED value in the AssumptionPack, you MUST include an "evidence_snippet" field containing the EXACT row text from the filing table.',
+                        'Format: "Row Label | Value1 | Value2 | ..." — copy the row as it appears in the table above.',
+                        'Also include "table_id" (e.g. "table_1_income_statement") and "column_label" (e.g. "2024") from the Statement Map.',
+                        'These fields enable precise source verification in the Source Viewer.',
+                      ].join('\n');
 
-                      // Add structured financial data if available
-                      if (hasStructuredData) {
-                        contextLines.push('=== EXTRACTED FINANCIAL LINE ITEMS ===');
-                        contextLines.push(
-                          `(Raw values from filing — multiply by ${scale.toLocaleString()} for actual dollar amounts)`
-                        );
-                        const labelMap = {
-                          total_revenue: 'Total Revenue',
-                          operating_income: 'Operating Income (EBIT proxy)',
-                          interest_expense: 'Interest Expense',
-                          net_income: 'Net Income',
-                          total_assets: 'Total Assets',
-                          total_liabilities: 'Total Liabilities',
-                          total_stockholders_equity: "Total Stockholders' Equity",
-                          current_assets: 'Total Current Assets',
-                          current_liabilities: 'Total Current Liabilities',
-                          gross_profit: 'Gross Profit',
-                          total_debt: 'Total Debt',
-                          ebit: 'EBIT',
-                        };
-                        for (const [key, rawVal] of Object.entries(financialItems)) {
-                          const label = labelMap[key] || key;
-                          const actualVal = (parseFloat(rawVal) * scale).toLocaleString();
-                          contextLines.push(`  ${label}: ${rawVal} (=${actualVal} actual)`);
-                        }
-                        contextLines.push('');
-                        contextLines.push('USE THESE EXACT NUMBERS. The "actual" values are what go into cells.');
-                        contextLines.push(
-                          'For example: if Total Liabilities = 308030 (in millions), put 308030000000 in the cell.'
-                        );
-                        contextLines.push('');
-                      }
+                      const fullContext = contextText + instructions;
 
-                      // Add raw snippets as backup
-                      if (hasSnippets) {
-                        contextLines.push('=== RAW FILING EXCERPTS (for verification) ===');
-                        snippets.forEach((s, i) => {
-                          contextLines.push(`--- Excerpt ${i + 1} ---`);
-                          contextLines.push(s);
-                        });
-                        contextLines.push('');
-                      }
-
-                      contextLines.push(`PROVENANCE: Set _provenance.source_url to: ${secFiling.url}`);
-
-                      const contextText = contextLines.join('\n');
                       // Add as the last user message so Gemini sees it right before responding
                       const lastUserIdx = fixedContents.findLastIndex((m) => m.role === 'user');
                       if (lastUserIdx >= 0) {
-                        fixedContents[lastUserIdx].parts.push({ text: contextText });
+                        fixedContents[lastUserIdx].parts.push({ text: fullContext });
                       }
+                      // Mark as injected so we don't re-inject on tool-call continuations
+                      globalThis._secContextInjectedFor.add(normalizedQuery);
                       console.log(
-                        '[mock-api] Injected SEC context:',
-                        Object.keys(financialItems).length,
-                        'structured items +',
-                        snippets.length,
-                        'snippets'
+                        `[mock-api] Injected StatementMap context: ${statementMap.tables.length} tables, ` +
+                        `periods=[${statementMap.availablePeriods.join(',')}], ` +
+                        `statements=[${statementMap.meta.primaryStatements.join(',')}]`
                       );
                     }
                   }
@@ -1201,144 +1081,148 @@ RULE 7 — DATA EXTRACTION FROM SEC CONTEXT:
           // to the actual HTML filing document.
           // (SEC_UA and secEdgarCache are declared above, before the pre-fetch block)
 
-          // Regex-based company extraction fallback (no Gemini call needed)
-          // Includes SEC CIK numbers for reliable EDGAR filing lookup
+          // ---- Dynamic CIK resolver ----
+          // Uses SEC EDGAR's company search API to find the CIK for ANY company.
+          // (KNOWN_CIKS and dynamicCikCache are declared above, before the pre-fetch block)
+
+          // Fast-path: check the known cache first (case-insensitive word match)
           function extractCompanyFromQuery(text) {
-            const patterns = [
-              { re: /\bapple\b/i, company: 'Apple Inc.', ticker: 'AAPL', cik: '0000320193' },
-              { re: /\btesla\b/i, company: 'Tesla, Inc.', ticker: 'TSLA', cik: '0001318605' },
-              {
-                re: /\bgoogle\b|\balphabet\b/i,
-                company: 'Alphabet Inc.',
-                ticker: 'GOOGL',
-                cik: '0001652044',
-              },
-              {
-                re: /\bmicrosoft\b/i,
-                company: 'Microsoft Corporation',
-                ticker: 'MSFT',
-                cik: '0000789019',
-              },
-              { re: /\bamazon\b/i, company: 'Amazon.com, Inc.', ticker: 'AMZN', cik: '0001018724' },
-              {
-                re: /\bmeta\b|\bfacebook\b/i,
-                company: 'Meta Platforms, Inc.',
-                ticker: 'META',
-                cik: '0001326801',
-              },
-              {
-                re: /\bnvidia\b/i,
-                company: 'NVIDIA Corporation',
-                ticker: 'NVDA',
-                cik: '0001045810',
-              },
-              { re: /\bnetflix\b/i, company: 'Netflix, Inc.', ticker: 'NFLX', cik: '0001065280' },
-              {
-                re: /\bjpmorgan\b|\bjpm\b/i,
-                company: 'JPMorgan Chase & Co.',
-                ticker: 'JPM',
-                cik: '0000019617',
-              },
-              { re: /\bvisa\b/i, company: 'Visa Inc.', ticker: 'V', cik: '0001403161' },
-              {
-                re: /\balibaba\b|\bbaba\b/i,
-                company: 'Alibaba Group Holding Limited',
-                ticker: 'BABA',
-                cik: '0001577552',
-              },
-              { re: /\bwalmart\b|\bwmt\b/i, company: 'Walmart Inc.', ticker: 'WMT', cik: '0000104169' },
-              {
-                re: /\bcostco\b/i,
-                company: 'Costco Wholesale Corporation',
-                ticker: 'COST',
-                cik: '0000909832',
-              },
-              {
-                re: /\bsalesforce\b/i,
-                company: 'Salesforce, Inc.',
-                ticker: 'CRM',
-                cik: '0001108524',
-              },
-              {
-                re: /\bintel\b/i,
-                company: 'Intel Corporation',
-                ticker: 'INTC',
-                cik: '0000050863',
-              },
-              {
-                re: /\bamd\b/i,
-                company: 'Advanced Micro Devices, Inc.',
-                ticker: 'AMD',
-                cik: '0000002488',
-              },
-              { re: /\bboeing\b/i, company: 'The Boeing Company', ticker: 'BA', cik: '0000012927' },
-              {
-                re: /\bdisney\b/i,
-                company: 'The Walt Disney Company',
-                ticker: 'DIS',
-                cik: '0001744489',
-              },
-              {
-                re: /\bcocacola\b|\bcoca-cola\b|\bcoke\b/i,
-                company: 'The Coca-Cola Company',
-                ticker: 'KO',
-                cik: '0000021344',
-              },
-              {
-                re: /\bpepsi\b|\bpepsico\b/i,
-                company: 'PepsiCo, Inc.',
-                ticker: 'PEP',
-                cik: '0000077476',
-              },
-              { re: /\bpfizer\b/i, company: 'Pfizer Inc.', ticker: 'PFE', cik: '0000078003' },
-              {
-                re: /\bjohnson\b|\bjnj\b/i,
-                company: 'Johnson & Johnson',
-                ticker: 'JNJ',
-                cik: '0000200406',
-              },
-              {
-                re: /\bprocter\b/i,
-                company: 'The Procter & Gamble Company',
-                ticker: 'PG',
-                cik: '0000080424',
-              },
-              {
-                re: /\bberkshire\b/i,
-                company: 'Berkshire Hathaway Inc.',
-                ticker: 'BRK-B',
-                cik: '0001067983',
-              },
-              {
-                re: /\bbank of america\b/i,
-                company: 'Bank of America Corporation',
-                ticker: 'BAC',
-                cik: '0000070858',
-              },
-              {
-                re: /\bgoldman\b/i,
-                company: 'The Goldman Sachs Group, Inc.',
-                ticker: 'GS',
-                cik: '0000886982',
-              },
-              {
-                re: /\bmorgan stanley\b/i,
-                company: 'Morgan Stanley',
-                ticker: 'MS',
-                cik: '0000895421',
-              },
-              {
-                re: /\buber\b/i,
-                company: 'Uber Technologies, Inc.',
-                ticker: 'UBER',
-                cik: '0001543151',
-              },
-              { re: /\bairbnb\b/i, company: 'Airbnb, Inc.', ticker: 'ABNB', cik: '0001559720' },
-            ];
-            for (const p of patterns) {
-              if (p.re.test(text)) return { company: p.company, ticker: p.ticker, cik: p.cik };
+            const lowerText = text.toLowerCase();
+            for (const [keyword, info] of KNOWN_CIKS) {
+              if (new RegExp(`\\b${keyword}\\b`, 'i').test(lowerText)) {
+                return info;
+              }
             }
             return null;
+          }
+
+          // Extract ALL companies mentioned in the query (for multi-company support)
+          function extractAllCompaniesFromQuery(text) {
+            const lowerText = text.toLowerCase();
+            const seen = new Set();
+            const results = [];
+            for (const [keyword, info] of KNOWN_CIKS) {
+              if (new RegExp(`\\b${keyword}\\b`, 'i').test(lowerText)) {
+                // Deduplicate by CIK (e.g., 'google' and 'alphabet' both map to same CIK)
+                if (!seen.has(info.cik)) {
+                  seen.add(info.cik);
+                  results.push(info);
+                }
+              }
+            }
+            return results;
+          }
+
+          // Dynamic CIK lookup via SEC EDGAR company search API
+          // Works for ANY public company — no hardcoded list needed
+          async function lookupCIK(companyName, ticker) {
+            const cacheKey = `${companyName}|${ticker}`;
+            if (dynamicCikCache.has(cacheKey)) return dynamicCikCache.get(cacheKey);
+
+            // Try ticker-based lookup first (most precise)
+            if (ticker) {
+              try {
+                const tickerUrl = `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(ticker)}%22&dateRange=custom&startdt=2020-01-01&enddt=2030-01-01&forms=10-K,10-Q,20-F&_source=ciks,display_names&from=0&size=1`;
+                const tickerRes = await fetch(tickerUrl, {
+                  headers: { 'User-Agent': SEC_UA },
+                  signal: AbortSignal.timeout(20000),
+                });
+                if (tickerRes.ok) {
+                  const tickerData = await tickerRes.json();
+                  const hit = tickerData?.hits?.hits?.[0];
+                  if (hit?._source?.ciks?.[0]) {
+                    const cik = hit._source.ciks[0];
+                    const padded = cik.padStart(10, '0');
+                    console.log(`[SEC-EDGAR] Dynamic CIK lookup (ticker ${ticker}):`, padded);
+                    dynamicCikCache.set(cacheKey, padded);
+                    return padded;
+                  }
+                }
+              } catch (e) {
+                console.log('[SEC-EDGAR] Ticker-based CIK lookup failed:', e.message);
+              }
+            }
+
+            // Fallback: company name search via company_search endpoint
+            try {
+              const searchUrl = `https://efts.sec.gov/LATEST/search-index?q=%22${encodeURIComponent(companyName)}%22&dateRange=custom&startdt=2020-01-01&enddt=2030-01-01&forms=10-K,20-F&_source=ciks,display_names&from=0&size=3`;
+              const searchRes = await fetch(searchUrl, {
+                headers: { 'User-Agent': SEC_UA },
+                signal: AbortSignal.timeout(20000),
+              });
+              if (searchRes.ok) {
+                const searchData = await searchRes.json();
+                const hit = searchData?.hits?.hits?.[0];
+                if (hit?._source?.ciks?.[0]) {
+                  const cik = hit._source.ciks[0];
+                  const padded = cik.padStart(10, '0');
+                  console.log(`[SEC-EDGAR] Dynamic CIK lookup (name "${companyName}"):`, padded);
+                  dynamicCikCache.set(cacheKey, padded);
+                  return padded;
+                }
+              }
+            } catch (e) {
+              console.log('[SEC-EDGAR] Name-based CIK lookup failed:', e.message);
+            }
+
+            // Last resort: EDGAR company API (tickers endpoint)
+            try {
+              const tUrl = `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(companyName)}&CIK=&type=10-K&dateb=&owner=include&count=5&search_text=&action=getcompany&output=atom`;
+              const tRes = await fetch(tUrl, {
+                headers: { 'User-Agent': SEC_UA },
+                signal: AbortSignal.timeout(20000),
+              });
+              if (tRes.ok) {
+                const atomText = await tRes.text();
+                // Parse CIK from Atom XML: <CIK>0001234567</CIK> or cik= in URLs
+                const cikMatch = atomText.match(/CIK=(\d+)/i) || atomText.match(/<CIK>(\d+)<\/CIK>/i);
+                if (cikMatch) {
+                  const padded = cikMatch[1].padStart(10, '0');
+                  console.log(`[SEC-EDGAR] Dynamic CIK lookup (EDGAR browse):`, padded);
+                  dynamicCikCache.set(cacheKey, padded);
+                  return padded;
+                }
+              }
+            } catch (e) {
+              console.log('[SEC-EDGAR] EDGAR browse CIK lookup failed:', e.message);
+            }
+
+            dynamicCikCache.set(cacheKey, null);
+            return null;
+          }
+
+          // Resolve ALL companies in the query and return an array of filing objects.
+          // Each filing has { url, title, company, ticker, fiscalYear }.
+          // Uses globalThis._allFilingsCache to avoid re-resolving across tool-call iterations.
+          async function resolveAllCompanyFilings(queryText) {
+            const cacheKey = queryText.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+            if (globalThis._allFilingsCache.has(cacheKey)) {
+              const cached = globalThis._allFilingsCache.get(cacheKey);
+              console.log('[SEC-EDGAR] Using globally cached filings for query:', cacheKey.slice(0, 60), '→', cached.length, 'filings');
+              return cached;
+            }
+            const allCompanies = extractAllCompaniesFromQuery(queryText);
+            if (allCompanies.length === 0) {
+              // Fall back to single-company Gemini extraction
+              const singleFiling = await resolveAnnualReportUrl(queryText);
+              const result = singleFiling ? [singleFiling] : [];
+              globalThis._allFilingsCache.set(cacheKey, result);
+              return result;
+            }
+            // For each company found, resolve its 10-K filing
+            const filings = [];
+            for (const companyInfo of allCompanies) {
+              try {
+                // Build a focused query for this specific company
+                const focusedQuery = `${companyInfo.company} (${companyInfo.ticker}) ${queryText.match(/\b(20\d{2})\b/)?.[1] || ''}`;
+                const filing = await resolveAnnualReportUrl(focusedQuery);
+                if (filing) filings.push(filing);
+              } catch (e) {
+                console.log(`[SEC-EDGAR] Failed to resolve ${companyInfo.company}:`, e.message);
+              }
+            }
+            globalThis._allFilingsCache.set(cacheKey, filings);
+            return filings;
           }
 
           async function resolveAnnualReportUrl(queryText) {
@@ -1366,21 +1250,22 @@ If you cannot determine a company, return {"company": null}.`,
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(extractBody),
-                  signal: AbortSignal.timeout(8000),
+                  signal: AbortSignal.timeout(20000),
                 });
-                if (!extractRes.ok) {
+                if (extractRes.ok) {
+                  const extractData = await extractRes.json();
+                  const extractText = extractData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                  const jsonMatch = extractText
+                    .replace(/```json\n?/g, '')
+                    .replace(/```\n?/g, '')
+                    .trim();
+                  try {
+                    info = JSON.parse(jsonMatch);
+                  } catch {
+                    console.log('[SEC-EDGAR] Failed to parse extraction:', extractText);
+                  }
+                } else {
                   console.log('[SEC-EDGAR] Gemini extraction failed:', extractRes.status);
-                }
-                const extractData = await extractRes.json();
-                const extractText = extractData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                const jsonMatch = extractText
-                  .replace(/```json\n?/g, '')
-                  .replace(/```\n?/g, '')
-                  .trim();
-                try {
-                  info = JSON.parse(jsonMatch);
-                } catch {
-                  console.log('[SEC-EDGAR] Failed to parse extraction:', extractText);
                 }
               } catch (e) {
                 console.log('[SEC-EDGAR] Gemini extraction timed out, using regex fallback');
@@ -1410,11 +1295,17 @@ If you cannot determine a company, return {"company": null}.`,
                 return secEdgarCache.get(cacheKey);
               }
 
-              // Enrich info with CIK from regex list if not present
+              // Enrich info with CIK — fast-path from cache, then dynamic lookup
               if (!info.cik) {
                 const regexInfo = extractCompanyFromQuery(queryText);
                 if (regexInfo?.cik) {
                   info.cik = regexInfo.cik;
+                } else {
+                  // Dynamic lookup for ANY company via SEC EDGAR APIs
+                  const dynamicCik = await lookupCIK(info.company, info.ticker);
+                  if (dynamicCik) {
+                    info.cik = dynamicCik;
+                  }
                 }
               }
 
@@ -1434,7 +1325,7 @@ If you cannot determine a company, return {"company": null}.`,
                 try {
                   const submRes = await fetch(submUrl, {
                     headers: { 'User-Agent': SEC_UA, Accept: 'application/json' },
-                    signal: AbortSignal.timeout(8000),
+                    signal: AbortSignal.timeout(20000),
                   });
                   if (submRes.ok) {
                     const submData = await submRes.json();
@@ -1491,7 +1382,7 @@ If you cannot determine a company, return {"company": null}.`,
                 const eftsUrl = `https://efts.sec.gov/LATEST/search-index?q=${searchQuery}&forms=10-K,20-F&dateRange=custom&startdt=${startDate}&enddt=${endDate}&_source=adsh,form,file_date,display_names,period_ending,file_type,ciks`;
                 const eftsRes = await fetch(eftsUrl, {
                   headers: { 'User-Agent': SEC_UA },
-                  signal: AbortSignal.timeout(8000),
+                  signal: AbortSignal.timeout(20000),
                 });
                 if (eftsRes.ok) {
                   const eftsData = await eftsRes.json();
@@ -1725,15 +1616,81 @@ If you cannot determine a company, return {"company": null}.`,
             };
           }
 
+          // ---- 3-ROLE ORCHESTRATOR CHECK ----
+          // For structured data-creation queries (financial models, analysis, etc.),
+          // route through the PLANNER → ASSUMPTIONS → EXECUTOR pipeline.
+          // For simple queries, pass through to direct Gemini call.
+          if (
+            !isWebSearch &&
+            !isInternalToolCall &&
+            !isToolCallContinuation &&
+            useToolsPrompt !== false &&
+            shouldUseRolePipeline(originalUserQuery)
+          ) {
+            console.log('[mock-api] ✓ Routing to 3-role orchestrator pipeline');
+            try {
+              // Gather spreadsheet context for the planner
+              const spreadsheetContext = fixedContents
+                .filter(m => m.role === 'user')
+                .flatMap(m => (m.parts || []).filter(p => p.text))
+                .map(p => p.text)
+                .join('\n')
+                .slice(0, 8000); // limit context size
+
+              // Gather SEC context if available (matches both SEC EDGAR and SEC FILING CONTEXT headers)
+              const secContext = fixedContents
+                .filter(m => m.role === 'user')
+                .flatMap(m => (m.parts || []).filter(p => p.text && (
+                  p.text.includes('SEC EDGAR') ||
+                  p.text.includes('SEC FILING CONTEXT') ||
+                  p.text.includes('EXTRACTED FINANCIAL LINE ITEMS') ||
+                  p.text.includes('STATEMENT MAP') ||
+                  p.text.includes('Source URL: https://www.sec.gov')
+                )))
+                .map(p => p.text)
+                .join('\n');
+
+              const providerConfig = {
+                gemini: { apiKey: GEMINI_API_KEY, model: GEMINI_MODEL },
+                openai: { apiKey: OPENAI_API_KEY, model: OPENAI_MODEL },
+                routing: PROVIDER_ROUTING,
+              };
+
+              await runOrchestrator({
+                userQuery: originalUserQuery,
+                providerConfig,
+                systemContext: QUADRATIC_CONTEXT_TEXT,
+                spreadsheetContext,
+                secContext: secContext || null,
+                geminiContents: fixedContents,
+                geminiTools,
+                geminiToolConfig,
+                systemParts,
+                res,
+                modelKey: usedModelKey,
+              });
+              return; // orchestrator handled the response
+            } catch (orchErr) {
+              console.error('[mock-api] Orchestrator failed, falling back to direct mode:', orchErr.message);
+              // If orchestrator already started streaming, we can't fall back — the connection is committed
+              if (res.headersSent) {
+                console.error('[mock-api] Headers already sent, cannot fall back to direct mode');
+                try { res.end(); } catch {}
+                return;
+              }
+              // Fall through to direct Gemini call
+            }
+          }
+
           if (useStream) {
             // ---- Streaming via Gemini streamGenerateContent ----
             try {
               const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
-              const geminiRes = await fetch(geminiUrl, {
+              const geminiRes = await fetchWithRetry(geminiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(geminiBody),
-              });
+              }, { retries: 3, timeout: 120000, label: 'GeminiDirect' });
 
               if (!geminiRes.ok) {
                 const errText = await geminiRes.text();
@@ -1825,38 +1782,50 @@ If you cannot determine a company, return {"company": null}.`,
                 reader.releaseLock();
               }
 
-              // ---- Source resolution pass (after stream, if tool calls present) ----
-              // Priority: 1) Official SEC EDGAR annual report (10-K)
-              //           2) Google grounding search (fallback)
-              if (accumulatedToolCalls.length > 0 && !isWebSearch) {
-                const lastUserMsg = fixedContents.filter((m) => m.role === 'user').pop();
-                const userQuery = lastUserMsg?.parts?.map((p) => p.text).join(' ') || '';
+              // ---- Source resolution pass (after stream) ----
+              // Inject _sourceUrls into tool call args so the client can build provenance.
+              // On the FIRST iteration, resolve SEC filings. On continuations, use cache.
+              // Skip for internal tool calls (set_chat_name, user_prompt_suggestions, etc.)
+              if (accumulatedToolCalls.length > 0 && !isWebSearch && !isInternalToolCall) {
+                const userQuery = originalUserQuery;
                 if (userQuery) {
-                  // Try to find the official SEC 10-K filing first
-                  const secFiling = await resolveAnnualReportUrl(userQuery);
                   let gMeta = null;
 
-                  if (secFiling) {
-                    // Build grounding metadata from the SEC filing
-                    console.log('[mock-api] Using SEC EDGAR 10-K as primary source:', secFiling.url.slice(0, 80));
-                    gMeta = {
-                      groundingChunks: [
-                        {
-                          web: {
-                            uri: secFiling.url,
-                            title: secFiling.title,
-                          },
-                        },
-                      ],
-                      groundingSupports: [],
-                      _secFiling: secFiling, // extra metadata for the viewer
-                    };
-                  } else {
-                    // Fallback to Google grounding
+                  // Use globally cached filings (resolveAllCompanyFilings itself caches)
+                  try {
+                    const allFilings = await resolveAllCompanyFilings(userQuery);
+                    if (allFilings.length > 0) {
+                      gMeta = {
+                        groundingChunks: allFilings.map(f => ({ web: { uri: f.url, title: f.title } })),
+                        groundingSupports: [],
+                        _secFilings: allFilings,
+                      };
+                    }
+                  } catch (e) {
+                    console.log('[mock-api] SEC source resolution failed (non-fatal):', e.message);
+                  }
+
+                  // Only fall back to Google grounding on the FIRST iteration
+                  // (avoids extra Gemini API call on continuations)
+                  if (!gMeta && !isToolCallContinuation) {
                     gMeta = await fetchGroundingMetadata(userQuery);
                   }
 
                   if (gMeta) {
+                    // Belt-and-suspenders: inject _sourceUrls directly into each tool call's
+                    // arguments JSON so the client has them even if content-based extraction fails
+                    const sourceUrlsForArgs = (gMeta.groundingChunks || [])
+                      .filter(c => c?.web?.uri)
+                      .map(c => ({ title: c.web.title || c.web.uri, uri: c.web.uri }));
+                    for (const tc of accumulatedToolCalls) {
+                      try {
+                        const parsedArgs = JSON.parse(tc.arguments);
+                        parsedArgs._sourceUrls = sourceUrlsForArgs;
+                        parsedArgs._responseText = accumulatedText || '';
+                        tc.arguments = JSON.stringify(parsedArgs);
+                      } catch {}
+                    }
+
                     const content = accumulatedText ? [{ type: 'text', text: accumulatedText }] : [];
                     content.push({ type: 'google_search_grounding_metadata', text: JSON.stringify(gMeta) });
                     const finalChunk = {
@@ -1868,7 +1837,12 @@ If you cannot determine a company, return {"company": null}.`,
                       isOnPaidPlan: true,
                       exceededBillingLimit: false,
                     };
+                    console.log('[mock-api] ✓ Writing grounding SSE chunk with', content.length, 'content items,',
+                      'groundingChunks:', JSON.stringify((gMeta.groundingChunks || []).map(c => c?.web?.uri?.slice(0, 60))),
+                      'toolCallsWithSourceUrls:', accumulatedToolCalls.length);
                     res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+                  } else {
+                    console.log('[mock-api] ✗ No grounding metadata obtained for source resolution');
                   }
                 }
               }
@@ -1913,24 +1887,39 @@ If you cannot determine a company, return {"company": null}.`,
               const data = await geminiRes.json();
               const parsed = parseGeminiResponse(data);
 
-              // Source resolution for non-streaming — SEC EDGAR first, then fallback
-              if (parsed.toolCalls.length > 0 && !isWebSearch) {
-                const lastUserMsg = fixedContents.filter((m) => m.role === 'user').pop();
-                const userQuery = lastUserMsg?.parts?.map((p) => p.text).join(' ') || '';
+              // Source resolution for non-streaming — uses global cache
+              if (parsed.toolCalls.length > 0 && !isWebSearch && !isInternalToolCall) {
+                const userQuery = originalUserQuery;
                 if (userQuery) {
-                  const secFiling = await resolveAnnualReportUrl(userQuery);
                   let gMeta = null;
-                  if (secFiling) {
-                    gMeta = {
-                      groundingChunks: [{ web: { uri: secFiling.url, title: secFiling.title } }],
-                      groundingSupports: [],
-                      _secFiling: secFiling,
-                    };
-                  } else {
+                  try {
+                    const allFilings = await resolveAllCompanyFilings(userQuery);
+                    if (allFilings.length > 0) {
+                      gMeta = {
+                        groundingChunks: allFilings.map(f => ({ web: { uri: f.url, title: f.title } })),
+                        groundingSupports: [],
+                        _secFilings: allFilings,
+                      };
+                    }
+                  } catch (e) {
+                    console.log('[mock-api] SEC source resolution failed (non-fatal):', e.message);
+                  }
+                  if (!gMeta && !isToolCallContinuation) {
                     gMeta = await fetchGroundingMetadata(userQuery);
                   }
                   if (gMeta) {
                     parsed.content.push({ type: 'google_search_grounding_metadata', text: JSON.stringify(gMeta) });
+                    // Also inject _sourceUrls into tool call args (belt-and-suspenders)
+                    const sourceUrlsForArgs = (gMeta.groundingChunks || [])
+                      .filter(c => c?.web?.uri)
+                      .map(c => ({ title: c.web.title || c.web.uri, uri: c.web.uri }));
+                    for (const tc of parsed.toolCalls) {
+                      try {
+                        const parsedArgs = JSON.parse(tc.arguments);
+                        parsedArgs._sourceUrls = sourceUrlsForArgs;
+                        tc.arguments = JSON.stringify(parsedArgs);
+                      } catch {}
+                    }
                   }
                 }
               }

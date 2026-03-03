@@ -1,10 +1,13 @@
 /**
  * Deep-Traceability: Hook that listens to cell selection changes
- * and updates the Source Viewer provenance atom (but does NOT auto-open the panel).
- * The panel is opened by ⌘+Click from ProvenanceIndicators.
+ * and updates the Source Viewer provenance atom.
+ *
+ * For cells with ORIGINAL DATA (has sourceUrl + cellValue), the SourceViewer
+ * auto-opens so the user can see and verify the value in context.
+ * The panel can also be opened manually via ⌘+Click from ProvenanceIndicators.
  */
 
-import { sourceViewerProvenanceAtom } from '@/app/atoms/sourceViewerAtom';
+import { sourceViewerCellAtom, sourceViewerOpenAtom, sourceViewerProvenanceAtom } from '@/app/atoms/sourceViewerAtom';
 import { events } from '@/app/events/events';
 import { sheets } from '@/app/grid/controller/Sheets';
 import { provenanceStore } from '@/app/provenance/provenanceStore';
@@ -13,11 +16,16 @@ import { useSetRecoilState } from 'recoil';
 
 /**
  * Selection-driven sync: When the user selects a cell, update the
- * provenance atom so the Source Viewer shows the right context
- * (if the panel is already open). Does NOT auto-open the panel.
+ * provenance atom so the Source Viewer shows the right context.
+ *
+ * For original data cells (those with a sourceUrl and a numeric cellValue),
+ * automatically open the SourceViewer panel so the user can verify the value
+ * in the source document (Enter to confirm, Delete to override).
  */
 export function useProvenanceSync() {
   const setProvenance = useSetRecoilState(sourceViewerProvenanceAtom);
+  const setOpen = useSetRecoilState(sourceViewerOpenAtom);
+  const setCell = useSetRecoilState(sourceViewerCellAtom);
   const lastKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -35,6 +43,17 @@ export function useProvenanceSync() {
 
         if (provenance) {
           setProvenance(provenance);
+
+          // Auto-open SourceViewer for original data cells:
+          // A cell is "original data" if it has a sourceUrl and a cellValue.
+          // This ensures the auto-location feature is always turned on for data cells.
+          const hasSourceUrl = !!provenance.sourceUrl;
+          const hasCellValue = !!provenance.location?.cellValue;
+          if (hasSourceUrl && hasCellValue) {
+            setCell({ sheetId, x: pos.x, y: pos.y });
+            setOpen(true);
+          }
+
           events.emit('provenanceSelected', provenance);
         } else {
           setProvenance(null);
@@ -54,5 +73,5 @@ export function useProvenanceSync() {
       events.off('changeSheet', handleCursorPosition);
       events.off('clickedToCell', handleCursorPosition);
     };
-  }, [setProvenance]);
+  }, [setProvenance, setOpen, setCell]);
 }

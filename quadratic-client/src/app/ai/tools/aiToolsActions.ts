@@ -410,20 +410,66 @@ export const aiToolsActions: AIToolActionsRecord = {
           if (gSupports.length > 0) {
             (baseProv as any)._groundingSupports = gSupports;
           }
-          // Store provenance only for data/source cells — skip:
-          //   - row 0 (header row: "Metric", "Value", "Source")
-          //   - col 0 (label column: "Total Liabilities", etc.)
-          //   - empty cells and formula cells (=...)
+
+          // 3-Role Orchestrator: extract AssumptionPack for enriched provenance
+          const assumptionPack = (provArgs as any)._assumptionPack;
+          const assumptionMap = new Map<string, any>();
+          if (assumptionPack?.assumptions) {
+            for (const a of assumptionPack.assumptions) {
+              // Key by cellRef (e.g. "B3") and also by name (e.g. "Revenue")
+              if (a.cellRef) assumptionMap.set(a.cellRef.toUpperCase(), a);
+              if (a.name) assumptionMap.set(a.name.toLowerCase(), a);
+            }
+            if (assumptionPack.methodology) {
+              (baseProv as any).methodology = assumptionPack.methodology;
+            }
+          }
+          // Store provenance ONLY for SOURCED numeric data cells.
+          // Skip: headers, row labels, column names, URLs, text-only cells.
+          // Only cells containing actual numeric values from SEC filings need source links.
+          const isMultiRowMultiCol = cell_values.length > 1 && (cell_values[0]?.length ?? 0) > 1;
+
+          // Helper: check if a value looks numeric (could be a financial data value)
+          const isNumericValue = (v: string): boolean => {
+            if (!v) return false;
+            // Strip common formatting: $, commas, parentheses (negative), %, spaces
+            const cleaned = v.replace(/[$,\s()%]/g, '').trim();
+            // Must be a number (possibly with decimals, possibly negative)
+            return /^-?\d+(\.\d+)?$/.test(cleaned) && cleaned.length > 0;
+          };
+
           for (let row = 0; row < cell_values.length; row++) {
-            // Skip the header row entirely
-            if (row === 0) continue;
+            // Skip the header row ONLY for multi-row+multi-col tables
+            if (isMultiRowMultiCol && row === 0) continue;
             for (let col = 0; col < (cell_values[row]?.length ?? 0); col++) {
-              // Skip the label column
-              if (col === 0) continue;
+              // Skip the label column ONLY for multi-row+multi-col tables
+              if (isMultiRowMultiCol && col === 0) continue;
               const val = (cell_values[row][col] ?? '').toString().trim();
               // Skip empty cells and formula cells
               if (val === '' || val.startsWith('=')) continue;
-              provenanceStore.set(sheetId, x + col, y + row, {
+              // Skip non-numeric values (labels, headers, URLs, text)
+              // Only actual numeric data values from filings should get source provenance
+              if (!isNumericValue(val)) continue;
+              // For tables, label is col 0 of same row. For single-cell inserts, derive from assumption.
+              let cellLabel: string | undefined;
+              if (isMultiRowMultiCol) {
+                cellLabel = cell_values[row]?.[0] ?? undefined;
+              } else {
+                // Single-cell insert: try to get label from assumption data by cell reference
+                const tmpColLetter = String.fromCharCode(65 + x + col);
+                const tmpRef = `${tmpColLetter}${y + row + 1}`;
+                const tmpAssumption = assumptionMap.get(tmpRef.toUpperCase());
+                cellLabel = tmpAssumption?.name || undefined;
+              }
+              // Look up assumption data for this cell
+              // Try by cell reference (e.g. "B2"), then by label name
+              const colLetter = String.fromCharCode(65 + x + col); // A=0, B=1, ...
+              const cellRef = `${colLetter}${y + row + 1}`;
+              const assumption =
+                assumptionMap.get(cellRef.toUpperCase()) ||
+                (cellLabel ? assumptionMap.get(String(cellLabel).toLowerCase()) : undefined);
+
+              const cellProv: Record<string, any> = {
                 ...baseProv,
                 location: {
                   rowIndex: row,
@@ -432,9 +478,41 @@ export const aiToolsActions: AIToolActionsRecord = {
                   pageIndex: provenanceMeta?.page_index,
                   jsonPath: provenanceMeta?.json_path,
                   cellValue: val,
-                  cellLabel: cell_values[row]?.[0] ?? undefined,
+                  cellLabel,
+                  // Deep traceability: filing context from ASSUMPTIONS role
+                  filingLabel: undefined,
+                  filingSection: undefined,
+                  filingNote: undefined,
                 },
-              });
+              };
+
+              // Enrich with assumption classification if orchestrator ran
+              if (assumption) {
+                cellProv.classification = assumption.classification;
+                cellProv.rationale = assumption.rationale;
+                cellProv.unit = assumption.unit;
+                if (assumption.classification === 'ASSUMED') {
+                  cellProv.bullValue = assumption.bullValue;
+                  cellProv.bearValue = assumption.bearValue;
+                }
+                if (assumption.classification === 'SOURCED') {
+                  cellProv.sourceUrl = assumption.sourceUrl || cellProv.sourceUrl;
+                  cellProv.sourceSnippet = assumption.sourceSnippet || cellProv.sourceSnippet;
+                }
+                // Deep traceability: store the EXACT label from the filing
+                // so SourceViewer can navigate to the correct line item
+                const loc = cellProv.location;
+                loc.filingLabel = assumption.filing_label || assumption.filingLabel || undefined;
+                loc.filingSection = assumption.filing_section || assumption.filingSection || undefined;
+                loc.filingNote = assumption.filing_note || assumption.filingNote || undefined;
+                // Evidence snippet: exact row text from the filing table for precise matching
+                loc.evidenceSnippet = assumption.evidence_snippet || assumption.evidenceSnippet || undefined;
+                // Table context from StatementMap
+                loc.tableId = assumption.table_id || assumption.tableId || undefined;
+                loc.columnLabel = assumption.column_label || assumption.columnLabel || undefined;
+              }
+
+              provenanceStore.set(sheetId, x + col, y + row, cellProv as Provenance);
             }
           }
         }
